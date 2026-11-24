@@ -352,15 +352,13 @@ export function createCompanionPromptContext({ now = Date.now, instanceId = rand
     },
     claim(agent, message, turn) {
       if (!owner(message)) {
-        if (message?.source?.kind === 'user') {
-          const current = lookup(agent);
-          current?.usageRequests.clear();
-          // A guest input cannot carry forward the owner's external notification.
-          if (current?.activeInput?.deviceContext) {
-            const active = current.activeInput;
-            current.activeInput = active.phoneMemory ? { ...active, deviceContext: undefined } : undefined;
-          }
-        }
+        const current = lookup(agent);
+        // A newly claimed non-owner input cannot carry the previous human's
+        // context through a later compaction, even in the same turn.
+        const active = current?.activeInput;
+        if (active) current.activeInput = active.phoneMemory
+          ? { ...active, deviceContext: undefined, anchor: null } : undefined;
+        if (message?.source?.kind === 'user') current?.usageRequests.clear();
         return;
       }
       const current = lookup(agent);
@@ -400,10 +398,24 @@ export function createCompanionPromptContext({ now = Date.now, instanceId = rand
           phoneMemory: pending.phoneMemory, deviceContext: pending.deviceContext };
       }
     },
-    commit(session, message, committedAt) {
-      if (closed || !owner(message)) return;
+    commit(session, message, committedAt, event) {
+      if (closed) return;
       const current = sessions.get(session?.id);
       if (!current || current.session !== session || lookup(current.agent) !== current) return;
+      const active = current.activeInput;
+      // Only a real replacement of the node carrying this particular human
+      // can move the anchor. The event also covers a checkpoint of a checkpoint.
+      if (message?.source?.kind === 'compact-checkpoint' && active?.anchor && event?.surfaceOp?.op === 'replace') {
+        const summary = session.eventAt(event.seq - 1);
+        if (summary?.type === 'compaction/summary' && summary.data.compactionId === message.source.compactionId &&
+          summary.data.shadowedSeqs.includes(active.anchor.seq) && event.sourceEventSeqs.includes(summary.seq)) {
+          current.activeInput = { ...active, anchor: { seq: event.seq, checkpointId: message.source.compactionId } };
+        }
+      }
+      if (!owner(message)) return;
+      if (active && active.anchor !== null && active.requestId === message.source.rpcId && sequence(event?.seq)) {
+        current.activeInput = { ...active, anchor: { seq: event.seq } };
+      }
       if (time(committedAt)) current.lastHumanAt = committedAt;
       const requestId = message.source.rpcId;
       const pending = current.pending.get(requestId) ?? current.parked.get(requestId);
@@ -461,9 +473,15 @@ export function createCompanionPromptContext({ now = Date.now, instanceId = rand
       let result = { ...options, signal };
       // A tool step may have other user-role runtime records after this human.
       // A different owner human (even without a usable RPC id) replaces it.
-      const index = options.messages.findLastIndex(message => message.role === 'user' && owner(message));
+      let index = options.messages.findLastIndex(message => message.role === 'user' && owner(message));
+      let humanRequestId = options.messages[index]?.source.rpcId;
+      if (index < 0 && active?.anchor?.checkpointId) {
+        index = options.messages.findLastIndex(message => message.role === 'user' &&
+          message.source?.kind === 'compact-checkpoint' && message.source.compactionId === active.anchor.checkpointId);
+        if (index >= 0) humanRequestId = active.requestId;
+      }
       const message = options.messages[index];
-      if (active && message?.source.rpcId === active.requestId) {
+      if (active && humanRequestId === active.requestId) {
         const extra = [];
         if (active.deviceContext) extra.push(Object.freeze({ type: 'text', text: active.deviceContext }));
         if (active.phoneMemory && JSON.parse(active.phoneMemory.block).items.length) {
@@ -477,7 +495,7 @@ export function createCompanionPromptContext({ now = Date.now, instanceId = rand
       }
       result = Object.freeze(result);
       phoneRequests.set(result, { current, active, usageRequestIds: [...current.usageRequests],
-        humanRequestId: message?.source.rpcId, turn: current.turn });
+        humanRequestId, turn: current.turn });
       return result;
     },
     // Called only at the marked runtime adapter boundary, with the exact

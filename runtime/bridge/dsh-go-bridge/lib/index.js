@@ -299,7 +299,7 @@ export function apply(ctx, config) {
   const usage = createUsage();
   ctx.on('session/event', (session, event) => {
     usage.observe(event);
-    if (event.type === 'user/message') companionPrompt.commit(session, event.data, event.time);
+    if (event.type === 'user/message') companionPrompt.commit(session, event.data, event.time, event);
     if (event.type === 'turn/end') companionPrompt.end(session);
   });
   ctx.on('agent/disposed', ({ agent }) => companionPrompt.retire(agent));

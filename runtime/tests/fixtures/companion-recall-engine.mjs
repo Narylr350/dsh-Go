@@ -156,7 +156,7 @@ export async function createFixture({ prefix, home: existingHome, keepHome = fal
     });
     ctx.on('agent/inbox/discarded', ({ agent, message }) => promptContext.discard(agent, message));
     ctx.on('session/event', (session, event) => {
-      if (event.type === 'user/message') promptContext.commit(session, event.data, event.time);
+      if (event.type === 'user/message') promptContext.commit(session, event.data, event.time, event);
       if (event.type === 'turn/end') promptContext.end(session);
     });
     ctx.on('agent/disposed', ({ agent }) => promptContext.retire(agent));
