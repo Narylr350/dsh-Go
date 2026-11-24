@@ -139,8 +139,22 @@ class _CompanionFullSession {
     int? echoSeq;
     Set<String>? previousSteps;
     CompanionSessionTools? devices;
-    void finish() {
-      if (!ended.isCompleted) ended.complete();
+    void finish({bool saveReply = false}) {
+      if (ended.isCompleted) return;
+      ended.complete();
+      final req = requestId;
+      final text = run.text;
+      if (!saveReply || req == null || run.discard || run.externalNoticeContent ||
+          text.trim().isEmpty || run.controlRevision != run.memory.store.archive['control_revision']) {
+        return;
+      }
+      final source = 'reply:${run.source['id']}:$req';
+      try {
+        visit.agent._save(run, source, text);
+        run.unpresentedReplies[source] = (start: 0, end: text.length);
+      } on Object catch (error) {
+        run.error = CompanionLightError(CompanionLightFailure.server, '$error');
+      }
     }
 
     void observeTurn(ChatState state) {
@@ -232,14 +246,7 @@ class _CompanionFullSession {
         }
         final failure = trace.endReason?.error;
         if (failure != null) run.error = CompanionHostError(companionHostFailure(failure.code), failure.message);
-        finish();
-        if (text.trim().isNotEmpty &&
-            !run.externalNoticeContent &&
-            run.controlRevision == run.memory.store.archive['control_revision']) {
-          final source = 'reply:${run.source['id']}:$req';
-          visit.agent._save(run, source, text);
-          run.unpresentedReplies[source] = (start: 0, end: text.length);
-        }
+        finish(saveReply: true);
         visit.refreshHostUsage();
       }
       if (changed) visit.changed();
@@ -251,6 +258,8 @@ class _CompanionFullSession {
     var handedOff = false;
     void Function()? clearStop;
     run.stopSession = (cancelHost) {
+      // stopPrompt can synchronously notify the observer that this turn retired.
+      finish(saveReply: true);
       if (cancelHost &&
           handedOff &&
           requestId != null &&
@@ -259,7 +268,6 @@ class _CompanionFullSession {
         clearStop = controller.stopPrompt(requestId!);
       }
       devices?.close();
-      finish();
     };
     Object? prepareError;
     try {

@@ -9,6 +9,7 @@ import 'package:dsh_app/companion/companion_pack.dart';
 import 'package:dsh_app/companion/companion_state.dart';
 import 'package:dsh_app/l10n/gen/app_localizations.dart';
 import 'package:dsh_app/links/launcher_entries.dart';
+import 'package:dsh_app/state/companion_agent_state.dart';
 import 'package:dsh_app/state/connection_state.dart';
 import 'package:dsh_app/state/hosts_state.dart';
 import 'package:dsh_app/state/sessions_state.dart';
@@ -561,6 +562,38 @@ void main() {
       await room.close(tester);
     }
   });
+
+  for (final discard in [false, true]) {
+    testWidgets('stopping a full reply records only its displayed prefix (discard: $discard)', (tester) async {
+      final room = _Room(root);
+      await room.open(tester);
+      final commit = room.client.releaseCommit = Completer<void>();
+      try {
+        await room.say(tester, '看看文件');
+        expect(tester.widget<CompanionSpeech>(find.byType(CompanionSpeech)).text, '找到文件了。');
+        Iterable<Object?> replies() => room.memory.store.messages()
+            .where((row) => row['role'] == 'assistant').map((row) => row['text']);
+        expect(replies(), isEmpty);
+        if (discard) {
+          final container = ProviderScope.containerOf(tester.element(find.byType(CompanionPage)));
+          container.read(companionAgentProvider).stop(discard: true);
+        } else {
+          await tester.tap(find.byIcon(AppIcons.stopGenerating).first);
+        }
+        await room.settle(tester);
+        final expected = discard ? <String>[] : ['[动作:点头]找到文件了。'];
+        expect(replies(), expected);
+        commit.complete(); // The Host can still publish its second step and terminal trace.
+        await settleMixed(tester, room.client.firstTurnEnded.future);
+        await room.settle(tester);
+        expect(replies(), expected);
+        expect(room.client.cancelledSessions, [room.client.prompts.single.session]);
+      } finally {
+        if (!commit.isCompleted) commit.complete();
+        await room.close(tester);
+      }
+    });
+  }
 
   testWidgets('Stop after prompt handoff waits for the exact source echo and then cancels its turn once', (
     tester,

@@ -774,11 +774,11 @@ class CompanionAgent extends ChangeNotifier {
     if (_visit?.residentUi case final CompanionAgentAmbientUi background) background.stopSpeech();
     final run = _run;
     if (run == null || !run.running) return;
+    run.discard = discard;
     run.stopSession?.call(cancelSession);
     run.onStop?.call();
     run.cancelled = true;
     run.running = false;
-    run.discard = discard;
     // A photo she is looking at for this turn is a request of its own.
     for (final abort in run.aborts.toList()) {
       abort.abort();
