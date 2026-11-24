@@ -330,14 +330,14 @@ void main() {
             !system.contains(body),
             'selected memory entered the stable system',
           );
-          invalid(() => CompanionContextProfile(name: '🐋' * 25).toJson());
-          equal(
-            CompanionContextProfile(name: '🐋' * 24).toJson()['name'],
-            '🐋' * 24,
+          final longName = '🐋' * 25;
+          final literal = CompanionContextProfile(
+            name: '  $longName  ',
+            persona: '前\u0000后',
           );
-          invalid(
-            () => const CompanionContextProfile(persona: '\u0000').toJson(),
-          );
+          final encoded = jsonDecode(companionContextJson(literal.toJson()));
+          equal(encoded['name'], longName);
+          equal(encoded['persona'], '前\u0000后');
         },
     'memory budget uses Unicode scalars and deterministic selection': () {
       final card = memoryCard('full', '资料');
