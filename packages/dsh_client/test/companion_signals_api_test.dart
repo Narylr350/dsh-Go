@@ -311,22 +311,21 @@ void main() {
     }
   });
   test('queued mux receipt retains old actual generation after reconnect', () async {
-    final events = <MuxEventReceipt>[];
-    final sub = client.mux.hostEventReceipts.listen(events.add);
+    final delivered = Completer<MuxEventReceipt>();
+    final sub = client.mux.hostEventReceipts
+        .where((receipt) => receipt.event is SessionStatusEvent)
+        .take(1)
+        .listen(delivered.complete);
+    addTearDown(sub.cancel);
     sub.pause();
-    host.event({
-      'type': 'emit',
-      'event': 'api-session/status',
-      'args': ['s', false],
-    });
-    await Future<void>.delayed(const Duration(milliseconds: 5));
+    final original = await host.proof(client, session: 's');
+    expect(original.current, isTrue);
     client.mux.reconnect();
     await client.mux.ready();
     sub.resume();
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    final old = events.firstWhere((r) => r.event is SessionStatusEvent);
+    final old = await delivered.future;
+    expect(old.provenance, same(original));
     expect(old.provenance.current, isFalse);
-    await sub.cancel();
   });
   test('local request resolution publishes clear with real provenance', () async {
     final next = client.mux.hostEventReceipts.firstWhere((r) => r.event is HostRequestCancelledEvent);
