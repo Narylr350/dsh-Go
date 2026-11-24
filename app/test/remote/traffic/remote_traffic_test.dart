@@ -286,6 +286,12 @@ void main() {
         }
         await until(() => next.narrowedModes.isNotEmpty);
         expect(state.read().controlReady, isFalse);
+        expect(hasQuote(), !switchHost, reason: 'only the same Host may show retained history before its snapshot');
+        if (switchHost) {
+          // B reports its own running turn before its delayed history arrives.
+          next.emit('api-session/status', ['S0', true]);
+          await until(() => state.read().running);
+        }
         c.read(appForegroundProvider.notifier).set(false);
         await tester.pump(const Duration(seconds: 30));
         await until(() => state.read().controlReady);

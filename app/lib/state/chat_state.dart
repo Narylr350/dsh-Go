@@ -464,7 +464,7 @@ class ChatController extends Notifier<ChatState> {
   ChatController(this.sessionId);
 
   final String sessionId;
-  final ChatTranscript _transcript = ChatTranscript();
+  var _transcript = ChatTranscript();
   int? _usageTurn;
   String? _usageAttempt;
   void Function(UsageOutcome, {UsageOperation? actual})? _usageTurnEnd;
@@ -587,10 +587,9 @@ class ChatController extends Notifier<ChatState> {
     // Reconnecting to the same Host keeps the existing conversation consent.
     final host = ref.watch(activeHostProvider);
     if (_approvalHost != host) {
-      // These requests belong to the previous Host, even if the new Host has
-      // the same session id. A new watch replays its own mux's pending requests.
-      // Retire only the local cards; do not answer or cancel the old Host's work.
-      _retireHostRequests();
+      // Even if the session id matches, its history and request cards belonged
+      // to the previous Host. A reconnect to the same Host keeps them.
+      if (_approvalHost != null) _transcript = ChatTranscript();
       _approvalHost = host;
       _transcriptClient = null;
       _model = null;
