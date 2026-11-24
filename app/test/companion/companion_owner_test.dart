@@ -394,7 +394,7 @@ class _Room {
   Future<void> close(WidgetTester tester) async {
     if (closed) return;
     closed = true;
-    await tester.pumpWidget(app(const SizedBox()));
+    await tester.pumpWidget(const SizedBox());
     phone.releaseGates();
     await tester.pump(const Duration(seconds: 15));
     for (final client in clients) {
@@ -535,7 +535,8 @@ void main() {
           await tester.enterText(find.byType(TextField), '新小屋未发送的草稿。');
         }
         voice.release.complete();
-        await settleMixed(tester, send);
+        // Session events publish on the ChatController frame-coalescing timer.
+        await settleMixed(tester, send, step: const Duration(milliseconds: 32));
         await flush(tester);
         final memory = room.container.read(companionMemoryOwnerProvider(room.root.absolute.path)).value!;
         expect(hostA.prompts.map((request) => request.text), switchHost ? isEmpty : [words]);
@@ -547,8 +548,7 @@ void main() {
         if (!voice.release.isCompleted) voice.release.complete();
         await room.close(tester);
       }
-      // Hangs on CI (Pro A31) and leaves the room behind for every later test; back with Pro's fix.
-    }, skip: true);
+    });
   }
 
   testWidgets('switching host retires a pending send without restoring its draft into B', (tester) async {
@@ -561,41 +561,43 @@ void main() {
     final response = Completer<void>();
     hostA.holdBeforeResponse = response.future;
     await room.open(tester);
-    addTearDown(() {
-      if (!response.isCompleted) response.complete();
-    });
-    await tester.enterText(find.byType(TextField), '属于 A 的句子');
-    tester.widget<CompanionComposer>(find.byType(CompanionComposer)).onSend();
-    await settleMixed(tester, hostA.firstPrompt.future);
-    final sent = hostA.prompts.single;
-    expect(sent.session, room.sessions.of(HostRef.local)!.sessionId);
-    expect(sent.text, '属于 A 的句子');
-    expect(sent.requestId, isNotEmpty);
-    expect(room.lightAsked, isEmpty);
-    final memory = room.container.read(companionMemoryOwnerProvider(room.root.absolute.path)).value!;
-    expect(memory.store.messages().where((row) => row['text'] == sent.text), hasLength(1));
-    room.host.change(nextHost);
-    await flush(tester);
-    final composer = tester.widget<CompanionComposer>(find.byType(CompanionComposer));
-    expect(composer.busy, isFalse, reason: 'B must not inherit A\'s pending preparation');
-    expect(composer.running, isFalse, reason: 'B must not inherit A\'s active turn');
+    try {
+      await tester.enterText(find.byType(TextField), '属于 A 的句子');
+      final onSend = tester.widget<CompanionComposer>(find.byType(CompanionComposer)).onSend;
+      final send = (onSend as Future<void> Function())();
+      await settleMixed(tester, hostA.firstPrompt.future);
+      final sent = hostA.prompts.single;
+      expect(sent.session, room.sessions.of(HostRef.local)!.sessionId);
+      expect(sent.text, '属于 A 的句子');
+      expect(sent.requestId, isNotEmpty);
+      expect(room.lightAsked, isEmpty);
+      final memory = room.container.read(companionMemoryOwnerProvider(room.root.absolute.path)).value!;
+      expect(memory.store.messages().where((row) => row['text'] == sent.text), hasLength(1));
+      room.host.change(nextHost);
+      await flush(tester);
+      final composer = tester.widget<CompanionComposer>(find.byType(CompanionComposer));
+      expect(composer.busy, isFalse, reason: 'B must not inherit A\'s pending preparation');
+      expect(composer.running, isFalse, reason: 'B must not inherit A\'s active turn');
 
-    // A commits a real follow-frame reply after B owns the room.
-    response.complete();
-    await settleMixed(tester, hostA.firstTurnEnded.future);
-    await flush(tester);
-    final messages = hostA.records[sent.session]!.where((row) => row['type'] == 'assistant/message');
-    expect(messages, hasLength(1));
-    expect(jsonEncode(messages.single), contains('会话回复'));
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, isEmpty);
-    expect(find.textContaining('会话回复'), findsNothing);
-    expect(memory.store.messages().where((row) => row['role'] == 'assistant'), isEmpty);
-    expect(hostA.prompts, hasLength(1));
-    expect(hostB.prompts, isEmpty);
-    expect(room.lightAsked, isEmpty);
-    await room.close(tester);
-    // Still fails on CI after A06hR2; back with Pro's fix.
-  }, skip: true);
+      // A commits a real follow-frame reply after B owns the room.
+      response.complete();
+      await settleMixed(tester, hostA.firstTurnEnded.future);
+      await settleMixed(tester, send, step: const Duration(milliseconds: 32));
+      await flush(tester);
+      final messages = hostA.records[sent.session]!.where((row) => row['type'] == 'assistant/message');
+      expect(messages, hasLength(1));
+      expect(jsonEncode(messages.single), contains('会话回复'));
+      expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, isEmpty);
+      expect(find.textContaining('会话回复'), findsNothing);
+      expect(memory.store.messages().where((row) => row['role'] == 'assistant'), isEmpty);
+      expect(hostA.prompts, hasLength(1));
+      expect(hostB.prompts, isEmpty);
+      expect(room.lightAsked, isEmpty);
+    } finally {
+      if (!response.isCompleted) response.complete();
+      await room.close(tester);
+    }
+  });
 
   testWidgets('queued events become inert after the page is disposed', (tester) async {
     final room = _Room(temporary);
