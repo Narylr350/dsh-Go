@@ -185,7 +185,10 @@ class CompanionAgentPhoneTools {
     });
     if (!_current) return 'stopped';
     if (answer?['decision'] == 'allowed-once') return null;
-    return answer?['reason'] as String? ?? 'unavailable';
+    final reason = answer?['reason'] as String? ?? 'unavailable';
+    // Busy returned before native registered this run. A later call may try the same run again.
+    if (reason == 'busy') _started = null;
+    return reason;
   }
 
   /// Retire Dart eligibility before sending the exact native stop. The native

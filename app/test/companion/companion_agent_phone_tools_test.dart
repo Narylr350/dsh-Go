@@ -149,6 +149,65 @@ void main() {
     expect(steps, isEmpty);
   });
 
+  test('an explicit busy reply shares the pending begin and lets a later call retry the same run', () async {
+    final admissions = <Completer<Map<String, Object?>>>[];
+    final identities = <Map>[];
+    final deviceCalls = <String>[];
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      switch (call.method) {
+        case 'companionPhoneTools':
+          return _catalog;
+        case 'companionPhoneBegin':
+          identities.add(call.arguments as Map);
+          final gate = Completer<Map<String, Object?>>();
+          admissions.add(gate);
+          release.add(() {
+            if (!gate.isCompleted) gate.complete({'decision': 'unavailable', 'reason': 'busy'});
+          });
+          return gate.future;
+        case 'companionPhoneCall':
+          deviceCalls.add((call.arguments as Map)['callId'] as String);
+          return '{"result":{"content":[]}}';
+        case 'companionPhoneEnd':
+          return null;
+        default:
+          throw StateError(call.method);
+      }
+    });
+    await phone.prepare();
+    Future<CompanionAgentToolResult> ask(String id) =>
+        phone.execute(CompanionAgentToolCall(id: id, name: 'phone_open', input: const {'app': 'calendar'}));
+    const busy = {'decision': 'unavailable', 'reason': 'busy'};
+    final first = ask('first'), alsoFirst = ask('concurrent');
+    await Future<void>.delayed(Duration.zero);
+    expect(admissions, hasLength(1));
+    expect(deviceCalls, isEmpty);
+    admissions.single.complete(busy);
+    for (final result in await Future.wait([first, alsoFirst])) {
+      expect(jsonDecode(result.content)['code'], 'phone_busy');
+    }
+    expect(admissions, hasLength(1), reason: 'the busy result itself does not initiate a retry');
+    final stillBusy = ask('later');
+    await Future<void>.delayed(Duration.zero);
+    expect(admissions, hasLength(2));
+    admissions.last.complete(busy);
+    expect(jsonDecode((await stillBusy).content)['code'], 'phone_busy');
+    expect(deviceCalls, isEmpty);
+
+    final next = ask('now free'), alsoNext = ask('same admission');
+    await Future<void>.delayed(Duration.zero);
+    expect(admissions, hasLength(3));
+    expect(deviceCalls, isEmpty);
+    admissions.last.complete({'decision': 'allowed-once'});
+    expect((await Future.wait([next, alsoNext])).every((r) => !r.isError), isTrue);
+    expect((await ask('already open')).isError, isFalse);
+    expect(admissions, hasLength(3));
+    expect(identities, everyElement(equals(identities.first)));
+    expect(deviceCalls, hasLength(3));
+    expect(deviceCalls.toSet(), hasLength(3));
+  });
+
   test('assistant yields the original task once, after approval and before the first main-screen read', () async {
     const appChannel = MethodChannel('dsh/app');
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
