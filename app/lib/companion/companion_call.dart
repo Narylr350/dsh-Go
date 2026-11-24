@@ -18,7 +18,7 @@ class CompanionCallConversation implements CallConversation {
   final Future<bool> Function(String text, String? callNote) _send;
   final Future<void> Function() _stop;
   final _replies = StreamController<CallReply>.broadcast();
-  bool _tracking = false;
+  Object? _turn;
   String _last = '';
   Timer? _idle;
 
@@ -33,24 +33,26 @@ class CompanionCallConversation implements CallConversation {
 
   @override
   Future<bool> send(String text, {String? callNote}) async {
-    _tracking = true;
+    final turn = _turn = Object();
+    _idle?.cancel();
     _last = '';
     final ok = await _send(text, callNote);
+    // A reply, cut-in, or route exit may already have retired this send.
+    if (!identical(turn, _turn)) return ok;
     if (!ok) {
-      _tracking = false;
+      _turn = null;
       return false;
     }
     // A line that never gets an answer (it failed in the room): stop waiting.
-    _idle?.cancel();
     _idle = Timer(const Duration(seconds: 90), () {
-      if (_tracking && _last.isEmpty) done();
+      if (_last.isEmpty) done();
     });
     return true;
   }
 
   /// Her reply so far, as the room reads it.
   void reply(String words, {required bool running}) {
-    if (!_tracking) return;
+    if (_turn == null) return;
     if (words != _last && (words.length >= _last.length || fullMode?.call() == true)) {
       _last = words;
       if (!_replies.isClosed) _replies.add(CallReply(words, done: false));
@@ -60,22 +62,22 @@ class CompanionCallConversation implements CallConversation {
 
   /// The turn is over (finished or failed).
   void done() {
-    if (!_tracking) return;
-    _tracking = false;
+    if (_turn == null) return;
+    _turn = null;
     _idle?.cancel();
     if (!_replies.isClosed) _replies.add(CallReply(_last, done: true));
   }
 
   @override
   Future<void> interrupt() async {
-    _tracking = false;
+    _turn = null;
     _idle?.cancel();
     await _stop();
   }
 
   @override
   void dispose() {
-    _tracking = false;
+    _turn = null;
     _idle?.cancel();
     unawaited(_replies.close());
   }

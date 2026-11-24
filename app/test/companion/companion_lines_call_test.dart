@@ -98,6 +98,83 @@ void main() {
     await sub.cancel();
     call.dispose();
   });
+
+  for (final finish in ['reply', 'interrupt', 'dispose']) {
+    test('a late send installs no idle timer after $finish', () async {
+      final result = Completer<bool>();
+      final call = CompanionCallConversation((_, _) => result.future, () async {});
+      final timers = <Timer>[];
+      final sent = runZoned(
+        () => call.send('第一句'),
+        zoneSpecification: ZoneSpecification(createTimer: (self, parent, zone, delay, callback) {
+          final timer = parent.createTimer(zone, delay, callback);
+          timers.add(timer);
+          return timer;
+        }),
+      );
+      try {
+        switch (finish) {
+          case 'reply':
+            call.reply('收到', running: false);
+          case 'interrupt':
+            await call.interrupt();
+          case 'dispose':
+            call.dispose();
+        }
+        result.complete(true);
+        expect(await sent, isTrue);
+        expect(timers.where((timer) => timer.isActive), isEmpty);
+      } finally {
+        call.dispose();
+      }
+    });
+  }
+
+  testWidgets('a new send retires the previous silence deadline immediately', (tester) async {
+    final next = Completer<bool>();
+    final call = CompanionCallConversation((text, _) => text == '上一句' ? Future.value(true) : next.future, () async {});
+    final replies = <CallReplyView>[];
+    call.replies.listen((r) => replies.add((r.text, r.done)));
+    try {
+      expect(await call.send('上一句'), isTrue);
+      await tester.pump(const Duration(seconds: 89));
+      final second = call.send('这句');
+      await tester.pump(const Duration(seconds: 1));
+      expect(replies, isEmpty);
+      next.complete(true);
+      expect(await second, isTrue);
+      await tester.pump(const Duration(seconds: 89));
+      expect(replies, isEmpty);
+      await tester.pump(const Duration(seconds: 1));
+      expect(replies, [('', true)]);
+      await tester.pump(const Duration(seconds: 90));
+      expect(replies, [('', true)]);
+    } finally {
+      call.dispose();
+    }
+  });
+
+  for (final accepted in [false, true]) {
+    testWidgets('older send receipt ($accepted) leaves the current silence deadline alone', (tester) async {
+      final first = Completer<bool>();
+      final call = CompanionCallConversation((text, _) => text == '现在' ? Future.value(true) : first.future, () async {});
+      final replies = <CallReplyView>[];
+      call.replies.listen((r) => replies.add((r.text, r.done)));
+      try {
+        final old = call.send('过去');
+        expect(await call.send('现在'), isTrue);
+        await tester.pump(const Duration(seconds: 60));
+        first.complete(accepted);
+        expect(await old, accepted);
+        await tester.pump(const Duration(seconds: 29));
+        expect(replies, isEmpty);
+        await tester.pump(const Duration(seconds: 1));
+        expect(replies, [('', true)]);
+      } finally {
+        call.dispose();
+      }
+    });
+  }
 }
 
 typedef CallReplyView = (String, bool);
