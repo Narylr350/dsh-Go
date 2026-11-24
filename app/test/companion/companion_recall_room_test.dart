@@ -10,11 +10,16 @@ import 'package:dsh_app/companion/companion_pack.dart';
 import 'package:dsh_app/companion/companion_state.dart';
 import 'package:dsh_app/l10n/gen/app_localizations.dart';
 import 'package:dsh_app/links/launcher_entries.dart';
+import 'package:dsh_app/speech/deepseek_speech.dart';
+import 'package:dsh_app/speech/speech_audio.dart';
+import 'package:dsh_app/speech/voice_cloud.dart';
+import 'package:dsh_app/state/app_notes.dart' show appNote;
 import 'package:dsh_app/state/companion_agent_state.dart';
 import 'package:dsh_app/state/connection_state.dart';
 import 'package:dsh_app/state/hosts_state.dart';
 import 'package:dsh_app/state/sessions_state.dart';
 import 'package:dsh_app/state/settings_state.dart';
+import 'package:dsh_app/state/voice_state.dart';
 import 'package:dsh_app/ui/chat/widgets/approval_card.dart';
 import 'package:dsh_app/ui/companion/companion_ask.dart';
 import 'package:dsh_app/ui/companion/companion_chrome.dart';
@@ -34,6 +39,8 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import '../chat/support/composer_fakes.dart' show FakeVoiceBridge, silentWav;
+import '../speech/speech_fakes.dart' show FakeAudio, FakeCloud, FakeDeepSeek;
 import '../support/companion_notes_peer.dart' show NotesPeer, hostAgentPath;
 import '../support/companion_session_peer.dart';
 import 'companion_test_settle.dart';
@@ -324,6 +331,7 @@ class _Room {
 
   /// Auxiliary traffic is recorded independently from session/prompt.
   final asked = <Map<String, Object?>>[];
+  int phoneModelPosts = 0;
   String reply = '嗯，我在。';
 
   Future<void> settle(WidgetTester tester) async {
@@ -333,9 +341,10 @@ class _Room {
     }
   }
 
-  http.Client model() => MockClient.streaming((request, body) async {
+  http.Client model({bool phone = false}) => MockClient.streaming((request, body) async {
     final sent = jsonDecode(await body.bytesToString()) as Map<String, Object?>;
     asked.add(sent);
+    if (phone) phoneModelPosts++;
     return http.StreamedResponse(
       Stream.value(utf8.encode(_reply(reply))),
       200,
@@ -343,7 +352,12 @@ class _Room {
     );
   });
 
-  Future<void> open(WidgetTester tester, {String? page, String phoneKey = 'synthetic-test-key'}) async {
+  Future<void> open(
+    WidgetTester tester, {
+    String? page,
+    String phoneKey = 'synthetic-test-key',
+    ({FakeAudio audio, FakeCloud recognizer})? callPorts,
+  }) async {
     // A valid old Host has the text route but no agent turn.
     bridge.host = (await tester.runAsync(NotesPeer.open))!;
     bridge.host!.hostModel
@@ -363,7 +377,13 @@ class _Room {
           activeConnectionProvider.overrideWithValue(AsyncData(HostConnection(client: client, isLocal: true))),
           sessionsProvider.overrideWith(() => sessions),
           settingsProvider.overrideWith(() => _Settings(phoneKey)),
-          companionLightClientProvider.overrideWithValue(model),
+          companionLightClientProvider.overrideWithValue(() => model(phone: true)),
+          if (callPorts != null) ...[
+            speechAudioProvider.overrideWithValue(callPorts.audio),
+            voiceBridgeProvider.overrideWithValue(FakeVoiceBridge()),
+            callRecognizerProvider.overrideWithValue(() async => callPorts.recognizer),
+            deepSeekSpeechProvider.overrideWithValue(() async => FakeDeepSeek()),
+          ],
         ],
         child: MaterialApp(
           theme: buildDarkTheme(),
@@ -395,6 +415,14 @@ class _Room {
     await settle(tester);
     await tester.pump(const Duration(seconds: 8));
     await settle(tester);
+  }
+
+  Future<void> pumpCallUntil(WidgetTester tester, bool Function() arrived) async {
+    final watch = Stopwatch()..start();
+    while (!arrived() && watch.elapsed < const Duration(seconds: 10)) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
   }
 
   Future<void> say(WidgetTester tester, String text) async {
@@ -919,12 +947,14 @@ void main() {
     );
   }
 
-  for (final supported in [false, true]) {
-    testWidgets('room call advertises notes only to a supporting host (supported: $supported)', (tester) async {
-      const text = '换个话题。', note = '口语回答，上一句听到“好的”。';
+  for (final (supported, fromAudio) in [(false, false), (true, false), (false, true), (true, true)]) {
+    final source = fromAudio ? ' from a recognized utterance' : '';
+    testWidgets('room call advertises notes only to a supporting host (supported: $supported)$source', (tester) async {
+      const text = '换个话题。';
       final room = _Room(root);
       room.bridge.callNote = supported;
-      await room.open(tester);
+      final audio = FakeAudio(), recognizer = FakeCloud(text);
+      await room.open(tester, callPorts: (audio: audio, recognizer: recognizer));
       try {
         final button = find.descendant(of: find.byType(CompanionComposer), matching: find.byIcon(AppIcons.call));
         await tester.tap(button);
@@ -935,16 +965,51 @@ void main() {
         }
         expect(page, findsOneWidget);
         expect(ModalRoute.of(tester.element(page))?.isCurrent, isTrue);
-        final call = tester.widget<VoiceCallPage>(page).conversation as CompanionCallConversation;
-        final sent = call.sendVerbatim(text, note);
-        expect(sent, isNotNull);
-        expect(await settleMixed(tester, sent!, step: const Duration(milliseconds: 32)), isTrue);
+        // A visible route can still be connecting, or already be leaving after a denied microphone.
+        final listening = find.descendant(of: page, matching: find.text('在听'));
+        await room.pumpCallUntil(tester, () => listening.evaluate().isNotEmpty);
+        expect(listening, findsOneWidget);
+        expect(audio.calls, contains('callStart:bargeIn=true'));
+        final container = ProviderScope.containerOf(tester.element(page), listen: false);
+        final beforePhone = room.phoneModelPosts;
+        final beforeHostAux = room.asked.length - beforePhone;
+        final String note;
+        if (fromAudio) {
+          note = appNote(L10n.of(tester.element(page)).speechCallHint);
+          final wav = silentWav(1);
+          audio.emit(const SpeechStart(over: false));
+          audio.emit(Utterance(wav, const Duration(seconds: 1)));
+          await room.pumpCallUntil(tester, () => room.client.firstTurnEnded.isCompleted);
+          expect(recognizer.heard, [same(wav)]);
+        } else {
+          // Keep the exact arbitrary sidecar, including what the person heard before cutting in.
+          note = '口语回答，上一句听到“好的”。';
+          final call = tester.widget<VoiceCallPage>(page).conversation as CompanionCallConversation;
+          final sent = call.sendVerbatim(text, note);
+          expect(sent, isNotNull);
+          expect(await settleMixed(tester, sent!, step: const Duration(milliseconds: 32)), isTrue);
+        }
+        final originals = room.memory.store.messages().where((row) => row['role'] == 'user').toList();
+        final phonePosts = room.phoneModelPosts - beforePhone;
+        final hostAuxPosts = room.asked.length - room.phoneModelPosts - beforeHostAux;
+        final roomErrors = tester.widgetList<CompanionSpeech>(find.byType(CompanionSpeech, skipOffstage: false))
+            .where((bubble) => bubble.error)
+            .map((bubble) => bubble.text)
+            .toList();
+        final trail = 'originals=${originals.length}, created=${room.sessions.created}, '
+            'bound=${room.bridge.boundSessions}, prepared=${room.bridge.prepared.length}, '
+            'phonePosts=$phonePosts, hostAuxPosts=$hostAuxPosts, roomErrors=$roomErrors, '
+            'agentError=${container.read(companionAgentProvider).error}';
+        expect(originals.map((row) => row['text']), [text], reason: trail);
+        expect(room.client.prompts, hasLength(1), reason: trail);
         expect(room.client.prompts.single.text, text);
+        if (fromAudio) expect(room.client.firstTurnEnded.isCompleted, isTrue, reason: trail);
+        expect(room.bridge.prepared, hasLength(1), reason: trail);
         final context = room.bridge.prepared.single['deviceContext'] as Map;
         expect(context['window'], 'voice');
         expect(context.containsKey('callNote'), supported);
         if (supported) expect(context['callNote'], note);
-        expect(room.memory.store.messages().singleWhere((row) => row['role'] == 'user')['text'], text);
+        expect(ModalRoute.of(tester.element(page))?.isCurrent, isTrue);
       } finally {
         await room.close(tester);
       }
