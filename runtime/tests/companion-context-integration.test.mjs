@@ -26,6 +26,39 @@ async function fixture(t) {
   return { ...f, agent, message, body, event, now: () => clock, setTime: value => { clock = value; } };
 }
 
+integration('a callback-less companion turn explains only missing phone abilities and retains real Host tools', async t => {
+  const f = await fixture(t), { agent } = f;
+  const register = name => f.ctx.tools.register({
+    name, description: 'Fixture capability explicitly installed on this Host.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    execute: async () => 'available',
+  });
+  register('host_lookup');
+  const send = async (id, text) => {
+    // Plain Session prompt, no phone HTTP request, sidecar preparation or phone key.
+    agent.followup(f.message(id, text));
+    await agent.whenIdle();
+    const physical = f.requests.at(-1);
+    assert.equal(physical.sessionId, agent.id);
+    const names = (physical.body.tools ?? []).map(tool => tool.name);
+    assert(names.includes('host_lookup'));
+    assert(!names.includes('companion_reminder'));
+    assert(!names.includes('companion_photos_recent'));
+    const rules = requestSystemText(physical);
+    assert.match(rules, /这次会话没有连上这项手机能力/);
+    assert.match(rules, /只在对方需要该能力时/);
+    assert.match(rules, /已配对.*本轮实际提供/);
+    return names;
+  };
+  assert(!(await send('remote-only', '提醒我喝水')).includes('paired_phone_status'));
+  // A Host can separately have an authorized tool. A missing business callback
+  // must never disable or conceal tools that the Host actually offers.
+  register('paired_phone_status');
+  assert((await send('independent-service', '看看配对手机的状态')).includes('paired_phone_status'));
+  assert.equal(f.requests.length, 2);
+});
+
 integration('actual Inbox same-turn steer clears the overnight gap after actual human Session commit', async t => {
   const f = await fixture(t), s = f.promptContext, { agent } = f;
   s.prepare(agent, f.body('morning'), [], f.now() - 20 * 3600000);
