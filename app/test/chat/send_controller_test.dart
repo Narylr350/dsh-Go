@@ -38,6 +38,8 @@ class _FakeClient extends DshClient {
   Object? uploadError;
   Object? promptError;
   Object? cancelError;
+  Object? queueError;
+  Future<void>? queueWait;
   Object? responseError;
 
   /// Holds the prompt's result until completed.
@@ -118,6 +120,8 @@ class _FakeClient extends DshClient {
   }) async {
     calls.add('${remove ? 'remove' : 'steer'}:$itemId');
     queue.add((itemId, remove, steer));
+    if (queueWait case final wait?) await wait;
+    if (queueError case final error?) throw error;
     if (gone.contains(itemId)) {
       throw const DshRemoteException('session/queue-item-not-found', 'queued item is no longer pending');
     }
@@ -628,6 +632,162 @@ void main() {
       ],
       'source': {'kind': 'user', 'rpcId': rpcId},
     };
+
+    testWidgets('stopPrompt uses the live turn between two frame publications', (tester) async {
+      await inTestClock(tester);
+      var seq = 0;
+      void emit(String type, Map<String, Object?> data) => client.events.add(
+        SessionLogEvent.fromJson({'seq': ++seq, 'time': 1792700000000 + seq, 'type': type, 'data': data}),
+      );
+      emit('turn/start', {'turn': 1});
+      emit('user/message', msg('u1', 'first', 'r1'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(state().runningTurn?.turn, 1);
+
+      emit('turn/end', {'turn': 1, 'reason': {'kind': 'completed'}});
+      emit('turn/start', {'turn': 2});
+      emit('user/message', msg('u2', 'second', 'r2'));
+      await tester.pump(); // Journal folded, but its 32 ms publication has not run.
+      expect(state().runningTurn?.turn, 1);
+      expect(chat().events.whereType<UserMessageEvent>().last.requestId, 'r2');
+
+      chat().stopPrompt('r1');
+      expect(client.cancels, 0);
+      chat().stopPrompt('r2');
+      expect(client.cancels, 1);
+      emit('turn/end', {'turn': 2, 'reason': {'kind': 'aborted'}});
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+    });
+
+    testWidgets('stopPrompt retries a known slot after 60 seconds without a new follow event', (tester) async {
+      await inTestClock(tester);
+      client.events.add(SessionLogEvent.fromJson({
+        'seq': 1, 'time': 1792700000001, 'type': 'agent/inbox/spliced',
+        'data': {'target': 'next-turn', 'start': 0, 'removedCount': 0, 'inserted': [msg('slot', 'queued', 'r')]},
+      }));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(state().pending.single.inboxId, 'slot');
+      client.queueError = const DshTransportException('temporary withdrawal failure');
+      chat().stopPrompt('r');
+      await tester.pump();
+      expect(client.calls, ['remove:slot'], reason: 'failure must not spin on its own error notification');
+      await tester.pump(const Duration(seconds: 61));
+      expect(client.queue.length, greaterThan(1));
+
+      final attempts = client.queue.length;
+      client.queueError = null;
+      await tester.pump(const Duration(seconds: 30));
+      expect(client.queue, hasLength(attempts + 1));
+      await tester.pump(const Duration(seconds: 5));
+      expect(client.queue, hasLength(attempts + 1), reason: 'accepted withdrawal retires its retry');
+      expect(client.cancels, 0);
+    });
+
+    testWidgets('stopPrompt retries the same slot on the new follow after an in-flight withdrawal is lost', (tester) async {
+      await inTestClock(tester);
+      final slot = msg('slot', 'queued', 'r');
+      void snapshot() => client.events.add(SessionSnapshotEvent.fromJson('s1', {
+        'cursor': 1, 'records': <Object?>[],
+        'projections': {'asOfSeq': 1, 'values': {'inbox': {'next-step': [], 'next-turn': [slot]}}},
+      }, isResync: true));
+      snapshot();
+      await tester.pump();
+      final response = Completer<void>();
+      client.queueWait = response.future;
+      chat().stopPrompt('r');
+      await tester.pump();
+      expect(client.calls, ['remove:slot']);
+      client.events.add(const ConnectionStateEvent(DshConnectionState.reconnecting));
+      await tester.pump();
+      expect(state().controlReady, isFalse);
+      client.queueWait = null;
+      response.completeError(const DshCarrierLostException('old follow closed'));
+      await tester.pump();
+      snapshot();
+      await tester.pump();
+      expect(state().controlReady, isTrue);
+      await tester.pump(const Duration(seconds: 2));
+      expect(client.calls, ['remove:slot', 'remove:slot']);
+    });
+
+    for (final failure in [
+      const DshRemoteException('session/queue-item-not-found', 'already claimed'),
+      const DshHttpException(403, 'denied'),
+    ]) {
+      testWidgets('stopPrompt leaves a rejected slot alone while it watches for a claim (${failure.runtimeType})', (tester) async {
+        await inTestClock(tester);
+        client.events.add(SessionLogEvent.fromJson({
+          'seq': 1, 'time': 1792700000001, 'type': 'agent/inbox/spliced',
+          'data': {'target': 'next-turn', 'start': 0, 'removedCount': 0, 'inserted': [msg('slot', 'queued', 'r')]},
+        }));
+        await tester.pump();
+        client.queueError = failure;
+        chat().stopPrompt('r');
+        await tester.pump(const Duration(seconds: 31));
+        expect(client.calls, ['remove:slot']);
+        client.events.add(SessionLogEvent.fromJson({
+          'seq': 2, 'time': 1792700000002, 'type': 'turn/start', 'data': {'turn': 1},
+        }));
+        client.events.add(SessionLogEvent.fromJson({
+          'seq': 3, 'time': 1792700000003, 'type': 'user/message', 'data': msg('u', 'queued', 'r'),
+        }));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 32));
+        expect(client.calls, ['remove:slot', 'cancel']);
+        await tester.pump(const Duration(seconds: 10));
+      });
+    }
+
+    test('a late failure does not replace the newer uncertain draft retry ID', () async {
+      final held = client.promptResult = Completer<String>();
+      final first = chat().send('first');
+      await settle();
+      final a = client.prompts.single.requestId!;
+      client.promptResult = null;
+      client.promptError = const DshCarrierLostException('newer reply lost');
+      expect(await chat().send('second'), isFalse);
+      final b = client.prompts.last.requestId!;
+      held.completeError(const DshCarrierLostException('old reply lost later'));
+      expect(await first, isFalse);
+      expect(chat().awaitingPromptOutcome(a), isTrue);
+      expect(chat().awaitingPromptOutcome(b), isTrue);
+      client.promptError = null;
+      expect(await chat().send('second'), isTrue);
+      expect(client.prompts.last.requestId, b);
+      expect(chat().awaitingPromptOutcome(a), isTrue);
+      expect(chat().awaitingPromptOutcome(b), isFalse);
+    });
+
+    testWidgets('uncertain prompt outcomes survive other sends and settle by request ID', (tester) async {
+      await inTestClock(tester);
+      client.promptError = const DshCarrierLostException('two missed acknowledgements');
+      expect(await chat().send('first'), isFalse);
+      final a = client.prompts.last.requestId!;
+      expect(await chat().send('second'), isFalse);
+      final b = client.prompts.last.requestId!;
+      client.promptError = null;
+      expect(await chat().send('third'), isTrue);
+      expect(chat().awaitingPromptOutcome(a), isTrue);
+      expect(chat().awaitingPromptOutcome(b), isTrue);
+
+      client.events.add(SessionLogEvent.fromJson({
+        'seq': 1, 'time': 1792700000001, 'type': 'user/message',
+        'data': msg('u1', 'first', a),
+      }));
+      await tester.pump();
+      expect(chat().awaitingPromptOutcome(a), isFalse);
+      expect(chat().awaitingPromptOutcome(b), isTrue);
+      client.events.add(SessionLogEvent.fromJson({
+        'seq': 2, 'time': 1792700000002, 'type': 'agent/inbox/spliced',
+        'data': {'target': 'next-turn', 'start': 0, 'removedCount': 0, 'inserted': [msg('slot', 'second', b)]},
+      }));
+      await tester.pump();
+      expect(chat().awaitingPromptOutcome(b), isFalse);
+      await tester.pump(const Duration(milliseconds: 32));
+    });
 
     test('a fresh snapshot keeps a claimed prompt on its way until its echo', () async {
       var seq = 0;

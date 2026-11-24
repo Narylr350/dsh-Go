@@ -32,6 +32,8 @@ enum SendMode {
   interrupt,
 }
 
+enum _Withdrawal { accepted, retryable, declined }
+
 /// Where the Host holds a prompt before it enters the transcript.
 enum InboxSlot {
   /// `next-step`: picked up by the running turn at its next step.
@@ -521,7 +523,16 @@ class ChatController extends Notifier<ChatState> {
   /// A send whose outcome is unknown (the connection dropped mid-call).
   /// Retrying its draft reuses the request id, which DSH dedups; on iOS a
   /// replacement attachment is a new submission even with the same name.
-  ({String content, String requestId})? _unsettled;
+  ({String content, String requestId})? _retryDraft;
+  // Every unknown RPC can still gain an inbox slot or echo, even after the
+  // composer has moved to another draft.
+  final _openOutcomes = <String>{};
+  var _draftAttempt = 0;
+
+  void _rememberUnknown(String content, String requestId, int attempt) {
+    if (attempt == _draftAttempt) _retryDraft = (content: content, requestId: requestId);
+    _openOutcomes.add(requestId);
+  }
 
   /// Device minus Host clock; null until a live event was seen (and always
   /// null on the on-device engine, which shares the clock).
@@ -578,6 +589,8 @@ class ChatController extends Notifier<ChatState> {
       // Retire only the local cards; do not answer or cancel the old Host's work.
       _retireHostRequests();
       _approvalHost = host;
+      _openOutcomes.clear();
+      _retryDraft = null;
       _defaultModelSaveFailed = false;
       _approvalScope = Object();
       _autoApprove = false;
@@ -892,6 +905,9 @@ class ChatController extends Notifier<ChatState> {
             };
             for (final end in endings) {
               _settleClaims(end);
+            }
+            if (_openOutcomes.isNotEmpty && (event is InboxSplicedEvent || event is SessionSnapshotEvent)) {
+              _openOutcomes.removeAll(_inboxIds());
             }
             if (event is UserMessageEvent) {
               _dropEchoed([event]);
@@ -1293,12 +1309,13 @@ class ChatController extends Notifier<ChatState> {
 
   /// Reconcile newly received echoes, not a bounded tail of rendered history.
   void _dropEchoed(Iterable<SessionLogEvent> events) {
-    if (_pending.isEmpty) return;
+    if (_pending.isEmpty && _openOutcomes.isEmpty) return;
     final echoed = {
       for (final event in events.whereType<UserMessageEvent>())
         if (event.isHumanPrompt) ?event.requestId,
     };
     if (echoed.isEmpty) return;
+    _openOutcomes.removeAll(echoed);
     final rest = _pending.where((p) => !echoed.contains(p.requestId)).toList();
     if (rest.length != _pending.length) _pending = List.unmodifiable(rest);
   }
@@ -1335,15 +1352,16 @@ class ChatController extends Notifier<ChatState> {
     if (!_canControl && (mode == SendMode.interrupt || !await waitForSync())) return false;
     if (!ref.mounted || !identical(client, _client) || !_canControl) return false;
     final operation = _ChatOperation(ref, client, _syncScope);
+    final attempt = ++_draftAttempt;
     final content = _contentKey(body, attachments);
-    final retrying = originalRequestId != null || _unsettled?.content == content;
-    final requestId = originalRequestId ?? (retrying ? _unsettled!.requestId : _requestId());
-    _unsettled = null;
+    final retrying = originalRequestId != null || _retryDraft?.content == content;
+    final requestId = originalRequestId ?? (retrying ? _retryDraft!.requestId : _requestId());
+    _retryDraft = null;
     // Retired on the same Host: the text comes back. A send that may have landed (or a retry of
     // one) keeps its request id for the next try, so the Host takes it once.
     bool retire({bool uncertain = false}) {
       if ((uncertain || retrying) && ref.mounted && identical(_client, operation.client)) {
-        _unsettled = (content: content, requestId: requestId);
+        _rememberUnknown(content, requestId, attempt);
       }
       return _retireSend(requestId);
     }
@@ -1417,6 +1435,7 @@ class ChatController extends Notifier<ChatState> {
         mode: promptMode,
         deliveryAllowed: deliveryAllowed,
       );
+      _openOutcomes.remove(requestId);
       _sent();
       // Delivered: sent, even if the watch moved on meanwhile (its echo comes on the new one).
       if (!_currentOperation(operation)) return true;
@@ -1432,13 +1451,14 @@ class ChatController extends Notifier<ChatState> {
               _claimedAt.containsKey(requestId) ||
               _withdrawn.contains(requestId) ||
               _inboxIds().contains(requestId))) {
+        _openOutcomes.remove(requestId);
         _sent();
         return true;
       }
       if (!_currentOperation(operation)) return retire(uncertain: _outcomeUnknown(e));
       _recordSendFailure(operation, e);
       if (_outcomeUnknown(e)) {
-        _unsettled = (content: content, requestId: requestId);
+        _rememberUnknown(content, requestId, attempt);
       }
       _pending = List.unmodifiable(_pending.where((p) => p.requestId != requestId));
       state = state.copyWith(pending: _placePending(), error: _sendFailure(e));
@@ -1799,16 +1819,20 @@ class ChatController extends Notifier<ChatState> {
     final client = _client;
     if (client == null) return () {};
     final lease = owner.keepAlive();
-    late final Timer deadline;
+    Timer? deadline;
+    Timer? retry;
     var closed = false;
     var scheduled = false;
-    String? lastSlot;
+    var withdrawing = false;
+    var retrySeconds = 2;
+    String? declinedSlot;
     late final void Function() unlisten;
     late final void Function() undispose;
     void close() {
       if (closed) return;
       closed = true;
-      deadline.cancel();
+      deadline?.cancel();
+      retry?.cancel();
       unlisten();
       undispose();
       lease.close();
@@ -1820,32 +1844,55 @@ class ChatController extends Notifier<ChatState> {
         close();
         return;
       }
-      if (!state.controlReady) return;
+      if (!_canControl) return;
       final echo = events.whereType<UserMessageEvent>().where(
         (e) => e.isHumanPrompt && !e.message.source.raw.containsKey('principal') && e.requestId == requestId,
       ).firstOrNull;
       if (echo != null) {
-        final turn = state.turns.reversed.where(
+        final turns = _transcript.turns;
+        final turn = turns.reversed.where(
           (t) => t.startSeq <= echo.seq && (t.endSeq == null || echo.seq <= t.endSeq!),
         ).firstOrNull;
         if (turn == null) return;
-        if (turn.running && state.runningTurn?.turn == turn.turn && !state.stopping) {
+        if (_transcript.running && turn.running && identical(turn, turns.last) && !state.stopping) {
           unawaited(_stop(_ChatOperation(owner, client, _syncScope), failure: appL10n.stateChatStopFailed));
         }
         close();
         return;
       }
-      final pending = state.pending.where((p) => p.requestId == requestId).firstOrNull;
+      final pending = _placePending().where((p) => p.requestId == requestId).firstOrNull;
       if (pending?.failed == true) {
         close();
         return;
       }
-      if (pending != null && pending.inboxId != null && pending.inboxId != lastSlot) {
-        lastSlot = pending.inboxId;
-        unawaited(withdrawQueued(pending).then((ok) {
-          if (ok) close(); // A concurrent claim will instead arrive as an echo.
-        }));
+      if (pending == null || pending.inboxId == null || pending.inboxId == declinedSlot) {
+        deadline ??= Timer(const Duration(seconds: 60), close);
+        return;
       }
+      // A known queued prompt can wait longer than the initial discovery window.
+      deadline?.cancel();
+      deadline = null;
+      if (withdrawing || retry != null) return;
+      withdrawing = true;
+      unawaited(_withdrawQueued(pending).then((result) {
+        withdrawing = false;
+        if (closed) return;
+        switch (result) {
+          case _Withdrawal.accepted:
+            close();
+          case _Withdrawal.declined:
+            // The Host rejected this slot. Watch for its echo or a new slot
+            // without resending the rejected RPC against a stale snapshot.
+            declinedSlot = pending.inboxId;
+            check();
+          case _Withdrawal.retryable:
+            retry = Timer(Duration(seconds: retrySeconds), () {
+              retry = null;
+              check();
+            });
+            retrySeconds = min(30, retrySeconds * 2);
+        }
+      }));
     }
     unlisten = listenSelf((_, _) {
       if (!scheduled && !closed) {
@@ -1862,7 +1909,7 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// A false send with this identity may still receive a durable echo.
-  bool awaitingPromptOutcome(String requestId) => _unsettled?.requestId == requestId;
+  bool awaitingPromptOutcome(String requestId) => _openOutcomes.contains(requestId);
 
   /// The stop key. What waits in the inbox then goes right away, as if the
   /// turn had ended: DSH keeps the inbox across a stop but starts no turn
@@ -1959,6 +2006,7 @@ class ChatController extends Notifier<ChatState> {
   /// arrive after a stop starts the next turn. Resolves to the ones that did
   /// not make it back; their bubbles go and the banner says why.
   Future<List<PendingPrompt>> _putBack(_ChatOperation operation, List<PendingPrompt> prompts) async {
+    final attempt = _draftAttempt;
     final lost = <PendingPrompt>[];
     Object? failure;
     for (final prompt in prompts) {
@@ -1974,6 +2022,7 @@ class ChatController extends Notifier<ChatState> {
         );
         if (!_currentOperation(operation)) return const [];
         // Back in the inbox: taking it out does not withdraw it.
+        _openOutcomes.remove(prompt.requestId);
         _withdrawn.remove(prompt.requestId);
       } catch (e) {
         if (!_currentOperation(operation)) return const [];
@@ -1982,7 +2031,7 @@ class ChatController extends Notifier<ChatState> {
         lost.add(prompt);
         failure = e;
         if (_outcomeUnknown(e)) {
-          _unsettled = (content: _contentKey(prompt.text, prompt.attachments), requestId: prompt.requestId);
+          _rememberUnknown(_contentKey(prompt.text, prompt.attachments), prompt.requestId, attempt);
         }
       } finally {
         if (_currentOperation(operation)) _finishMoving(operation, prompt.requestId);
@@ -2025,30 +2074,37 @@ class ChatController extends Notifier<ChatState> {
 
   /// Takes a prompt back out of the inbox before the agent reads it; the
   /// caller puts its text and attachments back into the composer.
-  Future<bool> withdrawQueued(PendingPrompt prompt) async {
+  Future<bool> withdrawQueued(PendingPrompt prompt) async => await _withdrawQueued(prompt) == _Withdrawal.accepted;
+
+  Future<_Withdrawal> _withdrawQueued(PendingPrompt prompt) async {
     final id = prompt.inboxId;
     final client = _client;
-    if (prompt.isAutomatic || id == null || client == null || !_canControl) return false;
+    if (prompt.isAutomatic || id == null || client == null || !_canControl) return _Withdrawal.declined;
     final operation = _ChatOperation(ref, client, _syncScope);
     try {
       await client.updateQueue(sessionId, id, remove: true);
     } on DshRemoteException catch (e) {
-      if (!_currentOperation(operation)) return false;
+      if (!_currentOperation(operation)) return _Withdrawal.retryable;
       state = state.copyWith(
         error: e.code == 'session/queue-item-not-found'
             ? appL10n.stateChatUndoTooLate
             : chatErrorText(e, action: appL10n.stateChatUndoFailed),
       );
-      return false;
+      return _Withdrawal.declined;
     } catch (e) {
-      if (!_currentOperation(operation)) return false;
+      if (!_currentOperation(operation)) return _Withdrawal.retryable;
       state = state.copyWith(error: chatErrorText(e, action: appL10n.stateChatUndoFailed));
-      return false;
+      return switch (e) {
+        DshTransportException() || DshCarrierLostException() => _Withdrawal.retryable,
+        DshHttpException(:final statusCode) when statusCode == 408 || statusCode == 429 || statusCode >= 500 =>
+          _Withdrawal.retryable,
+        _ => _Withdrawal.declined,
+      };
     }
-    if (!_currentOperation(operation)) return false;
+    if (!_currentOperation(operation)) return _Withdrawal.retryable;
     _pending = List.unmodifiable(_pending.where((p) => p.requestId != prompt.requestId));
     _publish();
-    return true;
+    return _Withdrawal.accepted;
   }
 
   Future<void> respond(ApprovalRequest request, ApprovalDecision decision) async {

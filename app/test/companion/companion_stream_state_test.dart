@@ -166,6 +166,7 @@ class _CorrectionBridge extends _Bridge {
   final String tool;
   final contexts = <Map<String, Object?>>[];
   final calls = <String, StreamController<Uint8List>>{};
+  final aborts = <String, DshHttpAbort>{};
   final toolResult = Completer<Map<String, Object?>>();
 
   DshHttpResponse capability(String id) => this.json({
@@ -209,6 +210,7 @@ class _CorrectionBridge extends _Bridge {
     final open = body! as Map;
     final id = open['requestId']! as String;
     expect((open['tools'] as List).cast<Map>().map((item) => item['name']), contains(tool));
+    aborts[id] = abort;
     final stream = calls[id] = StreamController<Uint8List>();
     stream.add(utf8.encode('${jsonEncode({'type': 'ready', 'token': id})}\n'));
     return DshHttpStreamResponse(200, 'application/x-ndjson', stream.stream, () async {
@@ -1359,7 +1361,11 @@ void main() {
       final second = client.prompts.last;
       expect(client.prompts.map((p) => p.text), ['说一句话。', correction]);
       expect(second.session, client.prompts.first.session);
-      expect(second.id, isNot(client.prompts.first.id));
+      final firstId = client.prompts.first.id;
+      expect(second.id, isNot(firstId));
+      expect(bridge.aborts[firstId]!.isAborted, isTrue);
+      await settleMixed(tester, bridge.calls[firstId]!.close());
+      expect(bridge.aborts[second.id]!.isAborted, isFalse);
       final context = bridge.contexts.singleWhere((row) => row['requestId'] == second.id);
       expect(context['sessionId'], second.session);
       final selection = jsonDecode((context['phoneMemory']! as Map)['block']! as String) as Map;
