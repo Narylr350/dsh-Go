@@ -897,6 +897,46 @@ void main() {
       await tester.pump(const Duration(seconds: 10));
     });
 
+    testWidgets('assistant entry wins while a requested phone log is still loading', (tester) async {
+      final commands = <(String, Map<String, Object?>)>[];
+      CompanionStageEvents? events;
+      late VoidCallback openAssistant;
+      await tester.pumpWidget(
+        _app(
+          Consumer(
+            builder: (context, ref, child) {
+              openAssistant = () => unawaited(openCompanionAssistant(context, ref, const CompanionAssistantEntry()));
+              return child!;
+            },
+            child: CompanionPage(
+              storeOverride: installedStore(),
+              stageBuilder: (controller, next) {
+                events = next;
+                return const SizedBox.expand();
+              },
+              stageController: CompanionStageController(sink: (type, args) => commands.add((type, args))),
+            ),
+          ),
+        ),
+      );
+      await _stageUp(tester, () => events);
+      events!.onReady();
+      await _until2(tester, () => find.byType(CompanionSpeech).evaluate().isNotEmpty);
+      final openLog = tester.widget<CompanionSpeech>(find.byType(CompanionSpeech)).onPullBack!;
+      commands.clear();
+      await tester.runAsync(() async {
+        openLog();
+        openAssistant();
+        // Same-file reads share a queue. Wait for the pending open to finish.
+        await CompanionLightHistory.at(root).load();
+      });
+      await _settle(tester);
+      expect(find.byType(CompanionLog), findsNothing);
+      expect(commands.where((event) => event.$1 == 'covered' && event.$2['on'] == true), isEmpty);
+      await tester.pumpWidget(_app(const SizedBox()));
+      await _settle(tester);
+    });
+
     testWidgets('the section: her room, what she remembers and her own page share one bar', (tester) async {
       SharedPreferences.setMockInitialValues({'companion_touch_hint_done': true, 'companion_home_hint_done': true});
       CompanionStageEvents? stageEvents;

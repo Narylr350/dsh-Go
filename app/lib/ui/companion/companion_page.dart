@@ -222,6 +222,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
 
   /// The backlog is over her (companion_log.dart).
   bool _logOpen = false;
+  int _logGeneration = 0;
   bool _phoneLog = false;
   ({(CompanionMemoryStore, int, int, String?, String) key, List<CompanionLogEntry> entries})? _savedLightLog;
 
@@ -2558,6 +2559,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
 
   /// The backlog over her: this room's whole conversation, in either mode.
   Future<void> _openLog({bool phone = false}) async {
+    final generation = ++_logGeneration;
     _notesForegroundEpoch++;
     _mapHandoff.close();
     _acted();
@@ -2565,7 +2567,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       final history = _lightHistory ??= CompanionLightHistory.at(_store!.root);
       await history.load();
     }
-    if (!mounted) return;
+    if (!mounted || generation != _logGeneration) return;
     _focus.unfocus();
     setState(() {
       _phoneLog = phone;
@@ -2576,6 +2578,8 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   }
 
   void _closeLog() {
+    // A system assistant entry can close the log while its file is still loading.
+    _logGeneration++;
     if (!mounted || !_logOpen) return;
     setState(() {
       _logOpen = false;
