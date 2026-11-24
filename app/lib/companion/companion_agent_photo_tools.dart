@@ -25,7 +25,8 @@ class CompanionAgentPhotoTools {
   CompanionAgentPhotoTools({required this.describe, this.channel = const MethodChannel('dsh/media')});
 
   /// What the selected picture model sees in [image].
-  final Future<CompanionPhotoSight> Function(CompanionScreenImage image, String question) describe;
+  final Future<CompanionPhotoSight> Function(CompanionScreenImage image, String question, bool Function()? isCancelled)
+      describe;
   final MethodChannel channel;
 
   static const _recent = CompanionAgentTool(
@@ -97,6 +98,7 @@ class CompanionAgentPhotoTools {
       final seen = await describe(
         image,
         question is String && question.trim().isNotEmpty ? question.trim() : '这张照片里有什么？',
+        call.isCancelled,
       );
       if (seen.noModel) {
         return _error(

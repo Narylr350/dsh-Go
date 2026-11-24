@@ -905,8 +905,12 @@ class _CompanionAgentVisit {
       );
       activePhoneTools = phoneTools;
       final photoTools = CompanionAgentPhotoTools(
-        describe: (image, question) =>
-            agent.describePhoto(owner: owner, image: image, question: question, isCurrent: current),
+        describe: (image, question, isCancelled) => agent.describePhoto(
+          owner: owner,
+          image: image,
+          question: question,
+          isCurrent: () => current() && isCancelled?.call() != true,
+        ),
       );
       if (noticeReply?.draftOnly != true) await phoneTools.prepare();
       if (!current()) return;

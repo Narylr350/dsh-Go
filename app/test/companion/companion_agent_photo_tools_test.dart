@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dsh_app/companion/companion_agent_photo_tools.dart';
@@ -39,7 +40,7 @@ void main() {
       throw StateError(call.method);
     });
     final tools = CompanionAgentPhotoTools(
-      describe: (image, question) async {
+      describe: (image, question, _) async {
         asked.add(question);
         return const CompanionPhotoSight.seen('海边的日落。');
       },
@@ -58,6 +59,35 @@ void main() {
     expect(asked, ['在哪拍的？']);
   });
 
+  test('each pending picture description observes just its own cancellation', () async {
+    final preparing = Completer<void>(), release = Completer<void>();
+    var entered = 0;
+    final dispatched = <String>[];
+    messenger.setMockMethodCallHandler(_media, (call) async => {
+      'bytes': Uint8List.fromList([0xff, 0xd8, 0xff, 0xd9]),
+      'width': 1, 'height': 1, 'mime_type': 'image/jpeg',
+    });
+    final tools = CompanionAgentPhotoTools(describe: (_, question, isCancelled) async {
+      if (++entered == 2) preparing.complete();
+      await release.future;
+      if (isCancelled?.call() == true) return const CompanionPhotoSight.failed();
+      dispatched.add(question);
+      return const CompanionPhotoSight.seen('海边');
+    });
+    var cancelled = false;
+    Future<CompanionAgentToolResult> look(String id, bool Function() stopped) =>
+        tools.bindings.last.execute(CompanionAgentToolCall(
+          id: id, name: 'photo_view', input: {'id': '41', 'question': id}, isCancelled: stopped,
+        ));
+    final first = look('first', () => cancelled), second = look('second', () => false);
+    await preparing.future;
+    cancelled = true;
+    release.complete();
+    expect((await first).isError, isTrue);
+    expect((await second).isError, isFalse);
+    expect(dispatched, ['second']);
+  });
+
   test('a refused permission, a missing picture model or a failed look each say what to do', () async {
     messenger.setMockMethodCallHandler(_media, (call) async {
       if (call.method == 'recentPhotos') throw PlatformException(code: 'permission');
@@ -69,7 +99,7 @@ void main() {
       };
     });
     var sight = const CompanionPhotoSight.noModel();
-    final tools = CompanionAgentPhotoTools(describe: (_, _) async => sight);
+    final tools = CompanionAgentPhotoTools(describe: (_, _, _) async => sight);
     final list = await tools.bindings.first.execute(
       const CompanionAgentToolCall(id: 'list', name: 'photos_recent', input: {}),
     );
