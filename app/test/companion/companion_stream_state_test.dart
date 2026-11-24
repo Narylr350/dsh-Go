@@ -226,7 +226,8 @@ class _CorrectionBridge extends _Bridge {
 }
 
 class _CorrectionClient extends _Client {
-  _CorrectionClient(super.bridge);
+  _CorrectionClient(super.bridge, {this.secondMode = PromptMode.steer});
+  final PromptMode secondMode;
   late _Wire wire;
   final prompts = <({String id, String session, String text})>[];
   final first = Completer<void>();
@@ -255,21 +256,22 @@ class _CorrectionClient extends _Client {
     String? requestId, PromptMode mode = PromptMode.queue, String? timeZone,
   }) async {
     expect(sessionId, wire.session);
-    expect(mode, prompts.isEmpty ? PromptMode.queue : PromptMode.steer);
+    expect(mode, prompts.isEmpty ? PromptMode.queue : secondMode);
     final id = requestId!;
     prompts.add((id: id, session: sessionId, text: text));
-    if (prompts.length == 1) wire.log('turn/start', {'turn': wire.turn});
+    if (mode == PromptMode.queue) {
+      wire.turn = prompts.length;
+      wire.log('turn/start', {'turn': wire.turn});
+    }
     wire.log('user/message', {
       'id': 'user-${prompts.length}', 'role': 'user',
       'content': [{'type': 'text', 'text': text}], 'source': {'kind': 'user', 'rpcId': id},
     });
-    if (prompts.length == 1) {
+    if (mode == PromptMode.queue) {
       wire.log('step/start', {'turn': wire.turn, 'step': wire.step});
-      wire.start('first-answer');
-      first.complete();
-    } else {
-      second.complete();
+      wire.start('answer-${wire.turn}');
     }
+    (prompts.length == 1 ? first : second).complete();
     return id;
   }
 }
@@ -1566,7 +1568,7 @@ void main() {
       await flush(tester);
     }
     final bridge = _CorrectionBridge();
-    final client = _CorrectionClient(bridge);
+    final client = _CorrectionClient(bridge, secondMode: PromptMode.queue);
     final room = _Room(temporary, client: client);
     await room.open(tester);
     try {
@@ -1601,23 +1603,31 @@ void main() {
       await report('start', ids[0]);
       await report('done', ids[0]);
       await report('start', ids[0]);
-      await report('start', ids[1]);
       await tester.enterText(find.byType(TextField), '我说一句。');
       await tester.pump();
+      expect(calls.where((c) => c.method == 'stop'), isEmpty);
+      await report('start', ids[1]);
+
+      // Her host turn ended, but the phone is still reading its queued parts.
+      await tester.tap(find.byKey(const ValueKey('send')));
+      await settleMixed(tester, client.second.future);
       expect(calls.where((c) => c.method == 'stop'), hasLength(1));
       await report('start', ids[2]);
       await report('done', ids[3]);
       await report('start', ids[4]);
       final mouth = room.commands.where((c) => c.$1 == 'say').skip(before);
       expect(mouth.map((c) => c.$2['chars']), [expected[0].length, expected[1].length]);
+      wire.finish('stop');
+      wire.settle('assistant/message', text: '');
+      wire.endTurn();
+      await room.drain();
     } finally {
       for (final stream in bridge.calls.values) {
         if (!stream.isClosed) unawaited(stream.close());
       }
       await room.close(tester);
     }
-    // Typing no longer reaches 'stop' on CI with the merged batch (Pro A24R2); back with Pro's fix.
-  }, skip: true);
+  });
 
   // A1: approvals are answered on the tasks page now; that route covering
   // the room is what holds a captured followup back.

@@ -145,7 +145,7 @@ void main() {
           (_) {},
         );
 
-    testWidgets('her lines are read aloud, her mouth follows the voice, typing silences her', (tester) async {
+    testWidgets('her lines are read aloud, her mouth follows the voice, sending silences her', (tester) async {
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_channel, (call) async {
         calls.add(call);
         return switch (call.method) {
@@ -212,10 +212,13 @@ void main() {
       await tester.pump();
       expect(commands.where((c) => c.$1 == 'say').map((c) => c.$2['chars']), [line['text'].toString().length, 2]);
 
-      // The person types: she stops.
+      final stops = calls.where((c) => c.method == 'stop').length;
       await tester.enterText(find.byType(TextField), '等等');
       await tester.pump();
-      expect(calls.map((c) => c.method), contains('stop'));
+      expect(calls.where((c) => c.method == 'stop'), hasLength(stops));
+      await tester.tap(find.byKey(const ValueKey('send')));
+      await tester.pump();
+      expect(calls.where((c) => c.method == 'stop'), hasLength(stops + 1));
 
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 10));
