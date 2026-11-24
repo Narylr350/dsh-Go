@@ -43,11 +43,11 @@ class CompanionSessionPeer extends DshClient {
     final controller = StreamController<DshEvent>();
     _watches.add(controller);
     _bySession.putIfAbsent(sessionId, () => []).add(controller);
-    controller.onListen = () => controller.add(
+    controller.add(
       parseFollowFrame(sessionId, {
         'type': 'snapshot',
         'cursor': (records[sessionId]?.length ?? 0) - 1,
-        'records': records[sessionId] ?? [],
+        'records': [for (final event in records[sessionId] ?? []) {'event': event}],
         'assistantStream': {'revision': 0},
       }),
     );
