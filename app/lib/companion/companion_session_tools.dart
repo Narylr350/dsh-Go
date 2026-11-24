@@ -169,7 +169,9 @@ class CompanionSessionTools {
       if (binding == null || !_current() || _abort.isAborted) {
         throw const DshClosedException('This phone capability is unavailable');
       }
-      result = await binding.execute(CompanionAgentToolCall(id: id, name: name, input: input));
+      result = await binding.execute(
+        CompanionAgentToolCall(id: id, name: name, input: input, isCancelled: () => !_calls.contains(id)),
+      );
     } catch (error) {
       result = CompanionAgentToolResult(content: error.toString(), isError: true);
     }

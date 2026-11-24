@@ -247,7 +247,7 @@ class CompanionAgentTaskTools {
     final operation = _operation(input);
     final previous = operation == 'create' ? null : _target(input, 'phone.reminder');
     final executor = await reminders.executorId();
-    _requireCurrent();
+    _requireCurrent(call);
     if (previous != null && previous['executor_id'] != executor) throw const _TaskFailure('original_phone_required');
     final MemoryRow task;
     if (operation == 'cancel') {
@@ -260,7 +260,7 @@ class CompanionAgentTaskTools {
       );
     } else {
       final spec = await _reminderSpec(input, previous);
-      _requireCurrent();
+      _requireCurrent(call);
       task = previous == null
           ? _store.createReminderFromMessage(
               messageId: _sourceId,
@@ -946,7 +946,8 @@ class CompanionAgentTaskTools {
     if (task['snapshot'] case final Map snapshot) 'report': snapshot['report'],
   };
 
-  void _requireCurrent() {
+  void _requireCurrent([CompanionAgentToolCall? call]) {
+    if (call?.isCancelled?.call() == true) throw const _TaskFailure('call_cancelled');
     if (!_current) throw const _TaskFailure('turn_not_current');
   }
 

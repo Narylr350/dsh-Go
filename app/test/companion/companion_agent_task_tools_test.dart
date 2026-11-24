@@ -11,6 +11,7 @@ import 'package:dsh_app/companion/companion_local.dart';
 import 'package:dsh_app/companion/companion_maps.dart';
 import 'package:dsh_app/companion/companion_memory.dart';
 import 'package:dsh_app/companion/companion_reminder.dart';
+import 'package:dsh_app/companion/companion_session_tools.dart';
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -298,6 +299,70 @@ void main() {
     await archive.close();
     messenger.setMockMethodCallHandler(reminderChannel, null);
     messenger.setMockMethodCallHandler(mapChannel, null);
+  });
+
+  test('cancelling a single session call during clock resolution leaves no phone reminder', () async {
+    final resolving = Completer<void>(), release = Completer<void>();
+    messenger.setMockMethodCallHandler(reminderChannel, (call) async {
+      if (call.method == 'resolve') {
+        resolving.complete();
+        await release.future;
+      }
+      return defaultReminder(call);
+    });
+    final peer = await NotesPeer.open();
+    final ready = Completer<HttpResponse>();
+    final nextResult = Completer<void>();
+    peer.respond = (req, body) async {
+      if (req.uri.path.endsWith('/open')) {
+        final stream = req.response
+          ..bufferOutput = false
+          ..headers.contentType = ContentType('application', 'x-ndjson', charset: 'utf-8')
+          ..writeln(jsonEncode({'type': 'ready', 'token': 'phone'}));
+        await stream.flush();
+        ready.complete(stream);
+      } else {
+        await NotesPeer.json(req, {});
+        if (body?['callId'] == 'status') nextResult.complete();
+      }
+    };
+    final bindings = archive.bind().bindings;
+    final reminderDone = Completer<CompanionAgentToolResult>();
+    final channel = await CompanionSessionTools.open(peer.client,
+      sessionId: 'room', requestId: 'turn', isCurrent: () => true,
+      tools: [
+        for (final binding in bindings)
+          if (binding.definition.name == 'reminder')
+            (definition: binding.definition, execute: (call) async {
+              final result = await binding.execute(call);
+              reminderDone.complete(result);
+              return result;
+            })
+          else binding,
+      ],
+    );
+    try {
+      final stream = await ready.future;
+      stream.writeln(jsonEncode({'type': 'call', 'callId': 'one', 'name': 'reminder', 'input': {
+        'operation': 'create', 'text': '带伞', 'localDate': '2026-11-22', 'localTime': '08:00',
+      }}));
+      await stream.flush();
+      await resolving.future;
+      stream.writeln(jsonEncode({'type': 'cancel', 'callId': 'one'}));
+      stream.writeln(jsonEncode({'type': 'call', 'callId': 'status', 'name': 'task_status', 'input': {}}));
+      await stream.flush();
+      await nextResult.future; // This call is still live and follows the cancel on the same stream.
+      release.complete();
+      final result = await reminderDone.future;
+      expect(_body(result), containsPair('code', 'call_cancelled'));
+      expect(archive.memory.store.tasks(), isEmpty);
+      expect(archive.ui.acceptedTasks, isEmpty);
+      expect(nativeCalls.where((c) => c.method == 'wake'), isEmpty);
+    } finally {
+      if (!release.isCompleted) release.complete();
+      channel?.close();
+      await peer.close();
+    }
   });
 
   test(
