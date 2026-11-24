@@ -57,7 +57,7 @@ class CompanionDrawerRow extends ConsumerWidget {
     final reminder = ref.watch(companionNextReminderProvider).value;
     final title = name ?? l10n.companionTitle;
     final note = switch (reminder) {
-      final due? => _reminderText(context, DateTime.fromMillisecondsSinceEpoch(due)),
+      final due? => reminderText(context, DateTime.fromMillisecondsSinceEpoch(due), DateTime.now()),
       _ when here => l10n.companionDrawerHere,
       _ => null,
     };
@@ -128,13 +128,14 @@ class CompanionDrawerRow extends ConsumerWidget {
   }
 
   /// 「19:00 提醒你」 today, 「明天 9:00」, then the date.
-  static String _reminderText(BuildContext context, DateTime due) {
+  @visibleForTesting
+  static String reminderText(BuildContext context, DateTime due, DateTime now) {
     final l10n = context.l10n;
-    final now = DateTime.now();
     final time = MaterialLocalizations.of(
       context,
     ).formatTimeOfDay(TimeOfDay.fromDateTime(due), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context));
-    final days = DateTime(due.year, due.month, due.day).difference(DateTime(now.year, now.month, now.day)).inDays;
+    // Compare the calendar dates shown on the phone; a local day can be shorter than 24 hours.
+    final days = DateTime.utc(due.year, due.month, due.day).difference(DateTime.utc(now.year, now.month, now.day)).inDays;
     return switch (days) {
       0 => l10n.companionDrawerReminderToday(time),
       1 => l10n.companionDrawerReminderTomorrow(time),
