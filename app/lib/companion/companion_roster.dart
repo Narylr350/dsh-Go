@@ -21,7 +21,17 @@ const _ownerKey = 'companion_identity_owner';
 const _pendingOwnerKey = 'companion_identity_pending_v1';
 
 /// One handoff at a time: a second switch waits for the first to finish.
-Future<bool> _queue = Future.value(false);
+Future<bool>? _queue;
+
+Future<bool> _enqueue(Future<bool> Function() step) {
+  final previous = _queue ?? Future<bool>.value(false);
+  late final Future<bool> next;
+  next = previous.then((_) => _safely(step)).whenComplete(() {
+    // Only the last handoff releases the queue and its scheduling zone.
+    if (identical(_queue, next)) _queue = null;
+  });
+  return _queue = next;
+}
 
 /// Makes the name and persona settings [key]'s: whoever they belonged to
 /// keeps hers for when she's back, and [key] gets what she had (none yet:
@@ -31,8 +41,7 @@ Future<bool> _queue = Future.value(false);
 /// It runs wherever she arrives (a switch here, a Workshop install made
 /// elsewhere, a restart after one was cut short), so the settings always
 /// follow whoever is in the room.
-Future<bool> companionAdoptIdentity(WidgetRef ref, String key) =>
-    _queue = _queue.then((_) => _safely(() => _adopt(ref, key)));
+Future<bool> companionAdoptIdentity(WidgetRef ref, String key) => _enqueue(() => _adopt(ref, key));
 
 /// Settings that can't be read or written (or a room already gone) leave
 /// things as they are; the next arrival tries again.
@@ -129,8 +138,7 @@ Future<bool> _adopt(WidgetRef ref, String key) async {
 
 /// [key] left the phone: what was kept for her goes, and if the settings were
 /// hers they go back to the defaults (how she calls the person stays).
-Future<void> companionForgetIdentity(WidgetRef ref, String key) =>
-    _queue = _queue.then((_) => _safely(() => _forget(ref, key)));
+Future<void> companionForgetIdentity(WidgetRef ref, String key) => _enqueue(() => _forget(ref, key));
 
 Future<bool> _forget(WidgetRef ref, String key) async {
   final prefs = await _identityPreferences(ref);

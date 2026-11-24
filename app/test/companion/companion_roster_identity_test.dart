@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dsh_app/companion/companion_roster.dart';
@@ -12,9 +13,15 @@ class _Preferences extends InMemorySharedPreferencesStore {
   _Preferences(super.data) : super.withData();
 
   final snapshots = <Map<String, Object>>[];
+  String? pauseKey;
+  final paused = Completer<void>(), resume = Completer<void>();
 
   @override
   Future<bool> setValue(String type, String key, Object value) async {
+    if (key == pauseKey && !paused.isCompleted) {
+      paused.complete();
+      await resume.future;
+    }
     final result = await super.setValue(type, key, value);
     snapshots.add(await getAll());
     return result;
@@ -87,6 +94,29 @@ void main() {
       }
     });
   }
+
+  testWidgets('finishing the first handoff keeps later operations behind the active second handoff', (tester) async {
+    final (store, ref) = await open(tester, oldData);
+    store.pauseKey = 'flutter.companion_identity_v1:Bea';
+    final enterBea = companionAdoptIdentity(ref, 'Bea');
+    final returnAnn = companionAdoptIdentity(ref, 'Ann');
+    await enterBea;
+    await store.paused.future;
+    final writes = store.snapshots.length;
+    var forgotten = false;
+    final forgetBea = companionForgetIdentity(ref, 'Bea').then((_) => forgotten = true);
+    try {
+      await tester.pump();
+      expect(forgotten, isFalse);
+      expect(store.snapshots, hasLength(writes));
+    } finally {
+      store.resume.complete();
+      await returnAnn;
+      await forgetBea;
+    }
+    check(ref, '阿安', 'Ann persona');
+    expect((await store.getAll()).containsKey('flutter.companion_identity_v1:Bea'), isFalse);
+  });
 
   testWidgets('a first legacy owner inherits existing settings and forgetting a shelved role keeps them', (
     tester,
