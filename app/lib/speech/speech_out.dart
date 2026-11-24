@@ -130,6 +130,16 @@ final _pause = RegExp(r'[，,、：:）)」』]');
 /// (an ASCII one only before a space, so 1,000 and 3:30 stay whole).
 final _firstPause = RegExp(r'[，、：；]|[,:](?=\s)');
 
+/// Largest complete UTF-16 prefix up to [end]. The next delta may finish a
+/// leading surrogate when [end] is the end of the current buffer.
+int _completeSpeechPrefix(String text, int end) {
+  if (end > 0 && (text.codeUnitAt(end - 1) & 0xfc00) == 0xd800 &&
+      (end == text.length || (text.codeUnitAt(end) & 0xfc00) == 0xdc00)) {
+    return end - 1;
+  }
+  return end;
+}
+
 /// Cuts text arriving in pieces into what can be spoken: whole sentences,
 /// the first one short (to start soon: it may end at a comma once it has
 /// [first] characters), later ones grouped up to [target].
@@ -160,8 +170,14 @@ class SpeechChunker {
       if (cut != null && cut > max) cut = null;
       if (cut == null && rest.length >= max) {
         // Too long without an end: the last sentence end or pause before max, else max.
-        final head = rest.substring(0, max);
-        cut = _sentenceEnd.allMatches(head).lastOrNull?.end ?? _pause.allMatches(head).lastOrNull?.end ?? max;
+        var end = _completeSpeechPrefix(rest, max);
+        if (end == 0) {
+          // A one-unit limit can only emit a supplementary character whole.
+          if (!final_ && rest.length == 1) break;
+          end = min(2, rest.length);
+        }
+        final head = rest.substring(0, end);
+        cut = _sentenceEnd.allMatches(head).lastOrNull?.end ?? _pause.allMatches(head).lastOrNull?.end ?? end;
       }
       if (cut == null) {
         if (!final_) break;

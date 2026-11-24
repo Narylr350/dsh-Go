@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dsh_app/speech/deepseek_speech.dart';
@@ -91,6 +92,26 @@ print('不读');
       final chunker = SpeechChunker(first: 4);
       chunker.add('门票是1,000元，3:30开门');
       expect(chunker.take(), ['门票是1,000元，']);
+    });
+
+    test('a hard split keeps supplementary letters whole even between deltas', () {
+      for (final max in [300, 200, 1]) {
+        final prefix = '甲' * (max - 1);
+        const glyph = '𠮷';
+        final whole = SpeechChunker(max: max)..add('$prefix$glyph后文。');
+        final expected = whole.take(final_: true);
+        final streamed = SpeechChunker(max: max)..add(prefix + glyph.substring(0, 1));
+        final pieces = streamed.take();
+        streamed.add('${glyph.substring(1)}后文。');
+        pieces.addAll(streamed.take(final_: true));
+        expect(pieces, expected);
+        // Standalone punctuation is intentionally silent at a one-unit limit.
+        expect(pieces.join(), '$prefix$glyph后文${max == 1 ? '' : '。'}');
+        for (final piece in pieces) {
+          expect(utf8.decode(utf8.encode(piece)), piece);
+          expect(piece.length, lessThanOrEqualTo(max == 1 ? 2 : max));
+        }
+      }
     });
 
     test('pieces with no letters or digits are dropped', () {
