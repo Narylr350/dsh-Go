@@ -63,9 +63,6 @@ class CompanionSessionTools {
     required String requestId,
     required List<CompanionAgentToolBinding> tools,
     required bool Function() isCurrent,
-    // Kept until the A04 caller is cleaned up in A07. Neither argument grants a tool.
-    bool local = false,
-    void Function()? stopPhone,
   }) async {
     final carrier = client.carrier;
     if (carrier is! DshHttpCarrier || tools.isEmpty) return null;
