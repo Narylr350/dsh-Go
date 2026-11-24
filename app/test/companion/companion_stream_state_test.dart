@@ -1468,6 +1468,31 @@ void main() {
     }
   });
 
+  testWidgets('the durable full reply corrects her expression and preserves previously played actions', (tester) async {
+    final client = _CorrectionClient(_CorrectionBridge());
+    final room = _Room(temporary, client: client);
+    await room.open(tester);
+    try {
+      await tester.enterText(find.byType(TextField), '看到什么了？');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('send')));
+      await settleMixed(tester, client.first.future);
+      client.wire.text('[动作:点头][表情:担心]我再看看。');
+      await room.drain();
+      expect(room.emotionNames, ['worried']);
+      expect(room.actionNames, ['nod']);
+      client.wire.finish('stop');
+      client.wire.settle('assistant/message', text: '[表情:开心][动作:点头][动作:点头]看清楚了。');
+      client.wire.endTurn();
+      await room.drain();
+      expect(room.speech(tester), '看清楚了。');
+      expect(room.emotionNames, ['worried', 'happy']);
+      expect(room.actionNames, ['nod', 'nod']);
+    } finally {
+      await room.close(tester);
+    }
+  });
+
   for (final sample in [
     (draft: '车站在东边。', finalText: '车站在西边。', moreSpeech: '车站在西边。', stop: true),
     (draft: '车站在东边。还没', finalText: '车站在东边。再说。', moreSpeech: '再说。', stop: false),

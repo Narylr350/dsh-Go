@@ -2242,8 +2242,10 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _watchPhoneStops(running && steps > 0);
 
     var stream = _replyStream;
+    var previous = _attachment.presentingSessionReply ? _lastReply : null;
     // A retry gets a new replyId, even for the same user line.
     if (stream == null || stream.user != user || !identical(stream.moves, _moves)) {
+      previous = null;
       stream = _replyStream = (
         user: user,
         moves: _moves,
@@ -2252,7 +2254,10 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     }
     final reply = stream.reader.read(text, streaming: running);
     _lastReply = (text: text, streaming: running, reply: reply);
-    for (final mark in reply.marks.skip(_marksHandled)) {
+    final marks = previous != null && !identical(previous.reply.marks, reply.marks) && !text.startsWith(previous.text)
+        ? reply.marksAfterCorrection(previous.reply)
+        : reply.marks.skip(_marksHandled);
+    for (final mark in marks) {
       _retireGreeting();
       switch (mark.kind) {
         case CompanionMarkKind.emotion:

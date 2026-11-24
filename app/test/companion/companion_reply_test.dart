@@ -133,6 +133,17 @@ void main() {
       }
     });
 
+    test('a correction changes the final face and accounts for each previously played action', () {
+      final before = parseCompanionReply('[表情:担心][动作:点头][动作:挥手]');
+      final after = parseCompanionReply('[动作:点头][表情:担心][动作:点头][动作:挥手][表情:开心]');
+      expect(after.marksAfterCorrection(before), [
+        const CompanionMark(CompanionMarkKind.action, 'nod'),
+        const CompanionMark(CompanionMarkKind.emotion, 'happy'),
+      ]);
+      expect(after.marksAfterCorrection(after), isEmpty);
+      expect(parseCompanionReply('[动作:挥手]只有动作。').marksAfterCorrection(before), isEmpty);
+    });
+
     test('the same text gives the same marks on every streaming update', () {
       const text = '[表情:开心]你好呀[动作:挥手]，今天';
       final seen = <CompanionMark>[];

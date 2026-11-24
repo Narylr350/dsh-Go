@@ -59,6 +59,11 @@ class CompanionAgentAttachment {
     return request != null && !request.saved && request.text.isNotEmpty ? request.text : null;
   }
 
+  bool get presentingSessionReply {
+    final run = _visit.run;
+    return run != null && run.hasSessionReply && !run.phoneRoute;
+  }
+
   String? get replyId => _visit.run?.replyId;
   int get phoneSteps => _visit.run?.phoneSteps ?? 0;
   Object? get error {

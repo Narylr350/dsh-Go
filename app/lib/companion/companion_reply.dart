@@ -102,6 +102,33 @@ class CompanionReply {
   // Removed marks, held partial marks and trimmed whitespace have no entry.
   final Iterable<int> _rawOffsets;
 
+  /// A corrected draft can move an action past a new expression. The action
+  /// already played; only additional occurrences and the current face are new.
+  Iterable<CompanionMark> marksAfterCorrection(CompanionReply previous) sync* {
+    final played = <CompanionMark, int>{};
+    CompanionMark? oldEmotion;
+    for (final mark in previous.marks) {
+      if (mark.kind == CompanionMarkKind.emotion) {
+        oldEmotion = mark;
+      } else {
+        played[mark] = (played[mark] ?? 0) + 1;
+      }
+    }
+    final lastEmotion = marks.lastIndexWhere((mark) => mark.kind == CompanionMarkKind.emotion);
+    for (final (index, mark) in marks.indexed) {
+      if (mark.kind == CompanionMarkKind.emotion) {
+        if (index == lastEmotion && mark != oldEmotion) yield mark;
+      } else {
+        final count = played[mark] ?? 0;
+        if (count == 0) {
+          yield mark;
+        } else {
+          played[mark] = count - 1;
+        }
+      }
+    }
+  }
+
   /// The non-blank word ranges contributed by one saved raw source range.
   /// Parse the whole turn first: a mark can cross a model-round boundary.
   List<({int start, int end})> wordRangesFrom(int rawStart, int rawEnd) {
