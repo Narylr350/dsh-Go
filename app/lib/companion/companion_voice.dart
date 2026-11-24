@@ -50,6 +50,14 @@ class CompanionVoiceEvent {
   final List<double>? loudness;
 }
 
+class _PlaybackAttempt {
+  _PlaybackAttempt(this.id, this.previous);
+
+  final String id;
+  _PlaybackAttempt? previous;
+  bool? accepted;
+}
+
 /// The native side, as it is.
 class CompanionVoice {
   CompanionVoice([MethodChannel? channel]) : _channel = channel ?? const MethodChannel('dsh/companion_voice') {
@@ -57,6 +65,9 @@ class CompanionVoice {
   }
 
   final MethodChannel _channel;
+  // A refused preview leaves the previous playback in place.
+  _PlaybackAttempt? _playback;
+  Completer<void>? _playbackChanged;
   final _events = StreamController<CompanionVoiceEvent>.broadcast();
 
   /// Her pitch and pace in the phone's own voice: a little higher than its default.
@@ -87,32 +98,49 @@ class CompanionVoice {
   }
 
   /// Queues [text] under [id] in the phone's voice, or replaces what it is saying with [flush].
-  Future<bool> speak(String id, String text, {bool flush = false, bool ohosCall = false}) async {
-    try {
-      return await _channel.invokeMethod<bool>('speak', {
-            'id': id,
-            'text': text,
-            'flush': flush,
-            'pitch': pitch,
-            'rate': rate,
-            if (Platform.operatingSystem == 'ohos' && ohosCall) 'call': true,
-          }) ??
-          false;
-    } on Object {
-      return false;
-    }
-  }
+  Future<bool> speak(String id, String text, {bool flush = false, bool ohosCall = false}) =>
+      _start('speak', id, {
+        'text': text,
+        'flush': flush,
+        'pitch': pitch,
+        'rate': rate,
+        if (Platform.operatingSystem == 'ohos' && ohosCall) 'call': true,
+      });
 
   /// Plays one fetched sentence from [path] under [id].
-  Future<bool> play(String id, String path) async {
+  Future<bool> play(String id, String path) => _start('play', id, {'path': path});
+
+  Future<bool> _start(String method, String id, Map<String, Object?> arguments) async {
+    final attempt = _playback = _PlaybackAttempt(id, _playback);
+    _wakeStop();
     try {
-      return await _channel.invokeMethod<bool>('play', {'id': id, 'path': path}) ?? false;
+      attempt.accepted = await _channel.invokeMethod<bool>(method, {'id': id, ...arguments}) ?? false;
     } on Object {
-      return false;
+      attempt.accepted = false;
     }
+    if (attempt.accepted!) attempt.previous = null;
+    while (_playback?.accepted == false) {
+      _playback = _playback!.previous;
+    }
+    _wakeStop();
+    return attempt.accepted!;
   }
 
-  Future<void> stop() async {
+  void _wakeStop() {
+    _playbackChanged?.complete();
+    _playbackChanged = null;
+  }
+
+  Future<void> stop({String? ifLatest}) async {
+    while (ifLatest != null) {
+      final last = _playback;
+      if (last == null) return;
+      if (last.id == ifLatest) break;
+      if (last.accepted == true) return;
+      await (_playbackChanged ??= Completer<void>()).future;
+    }
+    _playback = null;
+    _wakeStop();
     try {
       await _channel.invokeMethod<void>('stop');
     } on Object {
@@ -396,6 +424,7 @@ class CompanionSpeaker {
   /// One paid request has already failed. Admit one short native utterance at
   /// a time; the page and any reader keep the original ID until the last one.
   Future<void> _speakLongFallback(_Line line) async {
+    final cut = _cut.future;
     var announced = false;
     var offset = 0;
     try {
@@ -412,9 +441,14 @@ class CompanionSpeaker {
         }
 
         Timer? watchdog;
+        Future<void>? nativeStop;
         void progress() {
           watchdog?.cancel();
-          watchdog = Timer(const Duration(minutes: 1), () => finish(CompanionVoiceEventType.error));
+          watchdog = Timer(const Duration(minutes: 1), () {
+            if (end.isCompleted) return;
+            nativeStop = _voice.stop(ifLatest: nativeId);
+            finish(CompanionVoiceEventType.error);
+          });
         }
 
         _fallbackReceipt = (event) {
@@ -449,6 +483,7 @@ class CompanionSpeaker {
         );
         await end.future;
         watchdog?.cancel();
+        if (nativeStop != null) await Future.any([nativeStop!, cut]);
         if (line.generation != _generation) {
           if (!_events.isClosed) _events.add(CompanionVoiceEvent(CompanionVoiceEventType.stopped, line.id));
           return;

@@ -564,7 +564,7 @@ void main() {
       await until(() => folder.listSync().isEmpty);
     });
 
-    testWidgets('ongoing fallback progress renews the minute guard; a silent engine errors without advancing', (
+    testWidgets('fallback timeout waits for native stop before the next line', (
       tester,
     ) async {
       final speaker = CompanionSpeaker(
@@ -577,7 +577,15 @@ void main() {
       speaker.events.listen(events.add);
       await speaker.ready(const CompanionVoiceSettings(on: true, source: CompanionVoiceSource.openai));
       expect(await speaker.warmPhone(), isTrue);
-      speaker.speak('slow', '读' * 4000);
+      final stopAcknowledged = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        if (call.method == 'stop') await stopAcknowledged.future;
+        return call.method == 'speak' ? true : null;
+      });
+      speaker
+        ..speak('slow', '读' * 4000)
+        ..speak('next', '下一句。');
       await tester.pump();
       final first = calls.singleWhere((c) => c.method == 'speak').arguments['id'] as String;
       await tester.pump(const Duration(seconds: 59));
@@ -585,13 +593,71 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(seconds: 59));
       expect(events.map((e) => e.type), [CompanionVoiceEventType.fallback, CompanionVoiceEventType.range]);
+      final stopCount = calls.where((c) => c.method == 'stop').length;
       await tester.pump(const Duration(seconds: 1));
-      await native('done', first);
-      await tester.pump();
-      expect(events.last.id, 'slow');
-      expect(events.last.type, CompanionVoiceEventType.error);
-      expect(events.where((e) => e.type == CompanionVoiceEventType.done), isEmpty);
+      expect(calls.where((c) => c.method == 'stop'), hasLength(stopCount + 1));
       expect(calls.where((c) => c.method == 'speak'), hasLength(1));
+      await native('done', first); // A late terminal event cannot release the physical stop.
+      await tester.pump();
+      expect(calls.where((c) => c.method == 'speak'), hasLength(1));
+      stopAcknowledged.complete();
+      await tester.pump();
+      expect(events.where((e) => e.id == 'slow').last.type, CompanionVoiceEventType.error);
+      expect(events.where((e) => e.type == CompanionVoiceEventType.done), isEmpty);
+      expect(calls.lastWhere((c) => c.method == 'speak').arguments['id'], 'next');
+      await native('done', 'next');
+      await tester.pump();
+    });
+
+    for (final accepted in [false, true]) {
+      testWidgets('a late replacement receipt preserves the actual voice owner (accepted: $accepted)', (tester) async {
+        final voice = CompanionVoice();
+        final speaker = CompanionSpeaker(voice, () => MockClient((_) async => http.Response('', 503)), () async => folder);
+        addTearDown(speaker.dispose);
+        await speaker.ready(const CompanionVoiceSettings(on: true, source: CompanionVoiceSource.openai));
+        expect(await speaker.warmPhone(), isTrue);
+        final admission = Completer<bool>();
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'play') return admission.future;
+          return call.method == 'speak' ? true : null;
+        });
+        speaker.speak('old', '读' * 4000);
+        await tester.pump();
+        expect(calls.where((c) => c.method == 'speak'), hasLength(1));
+        final replacement = voice.play('preview', 'preview.wav');
+        final stops = calls.where((c) => c.method == 'stop').length;
+        await tester.pump(const Duration(minutes: 1));
+        expect(calls.where((c) => c.method == 'stop'), hasLength(stops));
+        admission.complete(accepted);
+        expect(await replacement, accepted);
+        await tester.pump();
+        expect(calls.where((c) => c.method == 'stop'), hasLength(accepted ? stops : stops + 1));
+        if (accepted) await native('done', 'preview');
+      });
+    }
+
+    testWidgets('a refused replacement cannot hide a fallback whose admission never answered', (tester) async {
+      final voice = CompanionVoice();
+      final speaker = CompanionSpeaker(voice, () => MockClient((_) async => http.Response('', 503)), () async => folder);
+      addTearDown(speaker.dispose);
+      await speaker.ready(const CompanionVoiceSettings(on: true, source: CompanionVoiceSource.openai));
+      expect(await speaker.warmPhone(), isTrue);
+      final old = Completer<bool>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        if (call.method == 'speak') return old.future;
+        return call.method == 'play' ? false : null;
+      });
+      speaker.speak('old', '读' * 4000);
+      await tester.pump();
+      expect(calls.where((c) => c.method == 'speak'), hasLength(1));
+      expect(await voice.play('preview', 'unreadable.wav'), isFalse);
+      final stops = calls.where((c) => c.method == 'stop').length;
+      await tester.pump(const Duration(minutes: 1));
+      expect(calls.where((c) => c.method == 'stop'), hasLength(stops + 1));
+      old.complete(true);
+      await tester.pump();
     });
 
     for (final cancel in [false, true]) {
