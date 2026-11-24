@@ -16,6 +16,10 @@ const _identityPrefix = 'companion_identity_v1:';
 /// Whose name and persona the settings hold right now.
 const _ownerKey = 'companion_identity_owner';
 
+/// Written before changing the shared settings. An empty target forgets their
+/// current owner; otherwise the target's existing shelf record is restored.
+const _pendingOwnerKey = 'companion_identity_pending_v1';
+
 /// One handoff at a time: a second switch waits for the first to finish.
 Future<bool> _queue = Future.value(false);
 
@@ -40,33 +44,64 @@ Future<bool> _safely(Future<bool> Function() step) async {
   }
 }
 
-Future<bool> _adopt(WidgetRef ref, String key) async {
-  final names = ref.read(companionNameProvider.notifier);
-  final personas = ref.read(companionPersonaProvider.notifier);
-  await personas.ready;
-  final prefs = await SharedPreferences.getInstance();
-  final owner = prefs.getString(_ownerKey);
-  if (owner == key) return false;
-  if (owner == null) {
-    await prefs.setString(_ownerKey, key);
-    return false;
-  }
-  final persona = ref.read(companionPersonaProvider);
-  await prefs.setString(
-    '$_identityPrefix$owner',
-    jsonEncode({'name': ref.read(companionNameProvider), 'custom': persona.custom}),
-  );
-  Map<Object?, Object?>? saved;
+Future<SharedPreferences> _identityPreferences(WidgetRef ref) async {
+  ref.read(companionNameProvider.notifier);
+  await ref.read(companionPersonaProvider.notifier).ready;
+  return SharedPreferences.getInstance();
+}
+
+Map<Object?, Object?>? _saved(SharedPreferences prefs, String key) {
   try {
     final decoded = jsonDecode(prefs.getString('$_identityPrefix$key') ?? 'null');
-    if (decoded is Map) saved = decoded;
+    return decoded is Map ? decoded : null;
   } on FormatException {
-    // Unreadable: she starts as her pack has her.
+    return null;
   }
-  await names.set(saved?['name'] as String?);
-  await personas.set(CompanionPersonaSettings(custom: saved?['custom'] as String? ?? '', callMe: persona.callMe));
-  await prefs.setString(_ownerKey, key);
+}
+
+/// The owner changes last. If the process stopped before then, replay the
+/// target settings without saving the partially restored values over anyone.
+Future<bool> _finishPending(WidgetRef ref, SharedPreferences prefs) async {
+  final target = prefs.getString(_pendingOwnerKey);
+  if (target == null) return false;
+  final owner = prefs.getString(_ownerKey);
+  if (target.isEmpty ? owner != null : owner != target) {
+    if (target.isEmpty) await prefs.remove('$_identityPrefix$owner');
+    final saved = target.isEmpty ? null : _saved(prefs, target);
+    final name = saved?['name'], custom = saved?['custom'];
+    final callMe = ref.read(companionPersonaProvider).callMe;
+    await ref.read(companionNameProvider.notifier).set(name is String ? name : null);
+    await ref
+        .read(companionPersonaProvider.notifier)
+        .set(CompanionPersonaSettings(custom: custom is String ? custom : '', callMe: callMe));
+    if (target.isEmpty) {
+      await prefs.remove(_ownerKey);
+    } else {
+      await prefs.setString(_ownerKey, target);
+    }
+  }
+  await prefs.remove(_pendingOwnerKey);
   return true;
+}
+
+Future<bool> _adopt(WidgetRef ref, String key) async {
+  final prefs = await _identityPreferences(ref);
+  final recovered = await _finishPending(ref, prefs);
+  final owner = prefs.getString(_ownerKey);
+  if (owner == key) return recovered;
+  if (owner == null && _saved(prefs, key) == null) {
+    // The first arrival on an older installation inherits its existing settings.
+    await prefs.setString(_ownerKey, key);
+    return recovered;
+  }
+  if (owner != null) {
+    await prefs.setString(
+      '$_identityPrefix$owner',
+      jsonEncode({'name': ref.read(companionNameProvider), 'custom': ref.read(companionPersonaProvider).custom}),
+    );
+  }
+  await prefs.setString(_pendingOwnerKey, key);
+  return _finishPending(ref, prefs);
 }
 
 /// [key] left the phone: what was kept for her goes, and if the settings were
@@ -75,12 +110,12 @@ Future<void> companionForgetIdentity(WidgetRef ref, String key) =>
     _queue = _queue.then((_) => _safely(() => _forget(ref, key)));
 
 Future<bool> _forget(WidgetRef ref, String key) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.remove('$_identityPrefix$key');
-  if (prefs.getString(_ownerKey) != key) return false;
-  await prefs.remove(_ownerKey);
-  final persona = ref.read(companionPersonaProvider);
-  await ref.read(companionNameProvider.notifier).set(null);
-  await ref.read(companionPersonaProvider.notifier).set(CompanionPersonaSettings(callMe: persona.callMe));
-  return true;
+  final prefs = await _identityPreferences(ref);
+  await _finishPending(ref, prefs);
+  if (prefs.getString(_ownerKey) != key) {
+    await prefs.remove('$_identityPrefix$key');
+    return false;
+  }
+  await prefs.setString(_pendingOwnerKey, '');
+  return _finishPending(ref, prefs);
 }
