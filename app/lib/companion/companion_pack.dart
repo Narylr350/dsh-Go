@@ -209,6 +209,14 @@ class CompanionPackStore {
   int get revision => _state.revision;
   Stream<int> get revisions => _state.changes.stream;
 
+  /// Generation of the active directory, including a switch away and back.
+  int get activeRevision => _state.activeRevision;
+
+  /// Uses the active directory under the same queue as activate/install/remove.
+  /// A result prepared for a retired generation cannot read or write its replacement.
+  Future<T?> withActivePack<T>(int expected, Future<T> Function(Directory) access) =>
+      _exclusive(() async => activeRevision == expected ? await access(pack) : null);
+
   /// The owner closes its WebView and then its server here. A failed hook
   /// aborts the change before any live directory moves. Do not await another
   /// operation on this store from a hook: it already holds the store queue.
@@ -231,6 +239,7 @@ class CompanionPackStore {
   /// [stopReaders] is false for changes that leave `pack/` alone.
   Future<T> _change<T>(Future<T> Function() body, {bool stopReaders = true}) async {
     final state = _state;
+    if (stopReaders) state.activeRevision++;
     state.changes.add(++state.revision);
     try {
       for (final hook in [if (stopReaders) ...state.before]) {
@@ -242,6 +251,8 @@ class CompanionPackStore {
       }
       return await body();
     } finally {
+      // A reader still winding down may have seen the in-progress generation.
+      if (stopReaders) state.activeRevision++;
       state.changes.add(++state.revision);
     }
   }
@@ -517,6 +528,7 @@ class CompanionPackStore {
 class _CompanionRootState {
   Future<void> queue = Future.value();
   int revision = 0;
+  int activeRevision = 0;
   final changes = StreamController<int>.broadcast(sync: true);
   final before = <Future<void> Function()>[];
 }

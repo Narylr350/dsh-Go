@@ -267,7 +267,9 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   CompanionProbe? _probe;
 
   /// Her own AI is fitting the model to her.
-  bool _adapting = false;
+  int? _probeRevision;
+  int? _adaptingRevision;
+  bool get _adapting => _adaptingRevision != null && _adaptingRevision == _store?.activeRevision;
 
   /// Whose moves these are: their names and choices are kept per character.
   /// Whose moves the saved labels and AI switches are: this very model (its
@@ -1274,7 +1276,11 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   /// the person's model; after that only when they ask (menu).
   void _onProbe(CompanionProbe probe) {
     // An offer for the model she had before goes with it.
-    if (_adaptOffer != null && _adaptOffer!.moc != probe.moc) setState(() => _adaptOffer = null);
+    final revision = _store?.activeRevision;
+    if (_adaptOffer != null && (_adaptOffer!.moc != probe.moc || _probeRevision != revision)) {
+      setState(() => _adaptOffer = null);
+    }
+    _probeRevision = revision;
     _probe = probe;
     if (probe.adapted) unawaited(_checkAdapter(probe));
     if (_adapting || companionAdaptWanted(probe).isEmpty) return;
@@ -1283,18 +1289,22 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
 
   Future<void> _autoAdapt(CompanionProbe probe) async {
     final store = _store;
-    if (store == null || !await companionAdaptAuto()) return;
+    final revision = _probeRevision;
+    if (store == null || revision == null || !await companionAdaptAuto() || !mounted || _probe != probe) return;
     // Nothing to ask with: the menu says how to get it.
     if (ref.read(settingsProvider).apiKey.trim().isEmpty) return;
-    final fingerprint = await companionMocFingerprint(store.pack, probe) ?? probe.moc;
-    if (await companionAdaptTried(fingerprint)) return;
+    final fingerprint = await store.withActivePack(
+      revision,
+      (pack) async => await companionMocFingerprint(pack, probe) ?? probe.moc,
+    );
+    if (fingerprint == null || await companionAdaptTried(fingerprint)) return;
     // Nothing goes out on its own until the person has said yes once.
     if (!await companionAdaptConsented()) {
-      if (mounted && _probe == probe) setState(() => _adaptOffer = probe);
+      if (mounted && _probe == probe && store.activeRevision == revision) setState(() => _adaptOffer = probe);
       return;
     }
     await companionAdaptMarkTried(fingerprint);
-    if (!mounted || _probe != probe) return;
+    if (!mounted || _probe != probe || store.activeRevision != revision) return;
     await _adapt();
   }
 
@@ -1303,26 +1313,36 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   /// is looked at afresh.
   Future<void> _checkAdapter(CompanionProbe probe) async {
     final store = _store;
-    if (store == null) return;
-    final adapter = await companionAdapterRead(store.pack);
-    final meant = adapter?['moc'];
-    if (meant is! String || meant.isEmpty) return;
-    final actual = await companionMocFingerprint(store.pack, probe);
-    if (actual == null || actual == meant || !mounted || _probe != probe) return;
-    await companionAdapterRemove(store.pack);
-    if (mounted) _stage.command('adapter');
+    final revision = _probeRevision;
+    if (store == null || revision == null) return;
+    final removed = await store.withActivePack(revision, (pack) async {
+      final adapter = await companionAdapterRead(pack);
+      final meant = adapter?['moc'];
+      if (meant is! String || meant.isEmpty) return false;
+      final actual = await companionMocFingerprint(pack, probe);
+      if (actual == null || actual == meant || !mounted || _probe != probe) return false;
+      await companionAdapterRemove(pack);
+      return true;
+    });
+    if (removed == true && mounted && store.activeRevision == revision) _stage.command('adapter');
   }
 
   Future<void> _answerAdaptOffer({required bool yes}) async {
     final probe = _adaptOffer;
     final store = _store;
-    if (probe == null || store == null) return;
+    final revision = _probeRevision;
+    if (probe == null || store == null || revision == null || _probe != probe) return;
     _acted();
     setState(() => _adaptOffer = null);
-    await companionAdaptMarkTried(await companionMocFingerprint(store.pack, probe) ?? probe.moc);
+    final fingerprint = await store.withActivePack(
+      revision,
+      (pack) async => await companionMocFingerprint(pack, probe) ?? probe.moc,
+    );
+    if (fingerprint == null) return;
+    await companionAdaptMarkTried(fingerprint);
     if (!yes) return;
     await companionAdaptSetConsented(true);
-    if (mounted && _probe == probe) await _adapt();
+    if (mounted && _probe == probe && store.activeRevision == revision) await _adapt();
   }
 
   /// Asks her own AI for an adapter, checks it, and she wears it at once.
@@ -1330,24 +1350,28 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   Future<void> _adapt({String? note}) async {
     final store = _store;
     final probe = _probe;
-    if (store == null || probe == null || _adapting) return;
+    final revision = _probeRevision;
+    if (store == null || probe == null || revision == null || revision != store.activeRevision || _adapting) return;
+    bool current() => mounted && revision == store.activeRevision && _adaptingRevision == revision;
     final l10n = context.l10n;
     final key = ref.read(settingsProvider).apiKey.trim();
     if (key.isEmpty) {
       _say(l10n.companionAdaptNoKey);
       return;
     }
-    setState(() => _adapting = true);
+    setState(() => _adaptingRevision = revision);
     _say(l10n.companionAdaptStart);
     _stage.command('mood', {'mood': 'thinking'});
     final client = ref.read(companionLightClientProvider)();
     try {
+      final previous = probe.adapted ? await store.withActivePack(revision, companionAdapterRead) : null;
+      if (!current()) return;
       final adapter = await companionAdaptAsk(
         client: client,
         apiKey: key,
         probe: probe,
         note: note,
-        current: probe.adapted ? await companionAdapterRead(store.pack) : null,
+        current: previous,
         onUsage: (usage) {
           final input = usage.reportedInputTokens;
           if (mounted && (input != null || usage.outputTokens != null)) {
@@ -1362,8 +1386,8 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
           }
         },
       );
-      await companionAdapterWrite(store.pack, probe, adapter);
-      if (!mounted) return;
+      await store.withActivePack(revision, (pack) => companionAdapterWrite(pack, probe, adapter));
+      if (!current()) return;
       _stage.command('adapter');
       _stage.command('mood', {'mood': 'idle'});
       _stage.command('emotion', {'name': 'happy', 'hold': 3200});
@@ -1371,7 +1395,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       final notes = adapter['notes'];
       _say(notes is String && notes.isNotEmpty ? l10n.companionAdaptDoneNote(notes) : l10n.companionAdaptDone);
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!current()) return;
       _stage.command('mood', {'mood': 'idle'});
       _say(switch (error) {
         CompanionLightError(failure: CompanionLightFailure.noKey) => l10n.companionAdaptNoKey,
@@ -1383,18 +1407,20 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       });
     } finally {
       client.close();
-      if (mounted) setState(() => _adapting = false);
+      if (mounted && _adaptingRevision == revision) setState(() => _adaptingRevision = null);
     }
   }
 
   Future<void> _undoAdapt() async {
     final store = _store;
     if (store == null) return;
-    if (_probe case final probe?) {
-      await companionAdaptMarkTried(await companionMocFingerprint(store.pack, probe) ?? probe.moc);
-    }
-    await companionAdapterRemove(store.pack);
-    if (!mounted) return;
+    final revision = _probeRevision ?? store.activeRevision;
+    final probe = _probe;
+    await store.withActivePack(revision, (pack) async {
+      if (probe != null) await companionAdaptMarkTried(await companionMocFingerprint(pack, probe) ?? probe.moc);
+      await companionAdapterRemove(pack);
+    });
+    if (!mounted || store.activeRevision != revision) return;
     _stage.command('adapter');
     _say(context.l10n.companionAdaptUndone);
   }
@@ -1933,6 +1959,9 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       );
     }
     if (_characterSourceKey != sourceKey) {
+      _adaptOffer = null;
+      _probe = null;
+      _probeRevision = null;
       _affinityCharacter = null;
       _affinitySettledDay = null;
       _bondTier = 0;

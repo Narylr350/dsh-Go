@@ -69,6 +69,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import '../workshop/support.dart' show workshopCharacter, workshopRuntime, workshopRuntimeDigest, workshopZip;
 import 'phone_keeper_fake.dart';
 import 'companion_test_settle.dart';
 import '../support/companion_notes_peer.dart';
@@ -1463,6 +1464,8 @@ void main() {
         required http.Client client,
         CompanionKeeper? phone,
         CompanionModelInfo? model,
+        CompanionPackStore? packStore,
+        bool sections = false,
         ValueChanged<CompanionStageEvents>? events,
         List<Override> extra = const [],
         HostConnection? connection,
@@ -1474,7 +1477,8 @@ void main() {
         await tester.pumpWidget(
           _app(
             CompanionPage(
-              storeOverride: installedStore(),
+              storeOverride: packStore ?? installedStore(),
+              sections: sections,
               stageBuilder: (controller, events) {
                 stageEvents = events;
                 return const SizedBox.expand();
@@ -7064,6 +7068,91 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         await tester.pump(const Duration(seconds: 20));
       });
+
+      for (final returnToFirst in [false, true]) {
+        testWidgets('late fitting cannot change the replacement companion, return to first=$returnToFirst', (
+          tester,
+        ) async {
+          tester.view.physicalSize = const Size(1080, 3200);
+          tester.view.devicePixelRatio = 2;
+          addTearDown(tester.view.reset);
+          final store = CompanionPackStore(root, expectedRuntime: workshopRuntimeDigest());
+          await tester.runAsync(() async {
+            for (final (name, moc) in [('Bea', 2), ('Ann', 1)]) {
+              final zip = workshopZip(root, {...workshopRuntime(), ...workshopCharacter(name: name, moc: moc)});
+              await store.install(zip.path);
+            }
+          });
+          final responses = <Completer<http.StreamedResponse>>[];
+          final client = MockClient.streaming((request, body) async {
+            final json = jsonDecode(await body.bytesToString()) as Map<String, Object?>;
+            if (json['system'] != companionAdaptSystem) {
+              return http.StreamedResponse(Stream.value(utf8.encode(_sse(['嗯。']))), 200);
+            }
+            final pending = Completer<http.StreamedResponse>();
+            responses.add(pending);
+            return pending.future;
+          });
+          late CompanionStageEvents events;
+          final commands = await openLight(
+            tester,
+            apiKey: 'sk-test',
+            client: client,
+            packStore: store,
+            sections: true,
+            events: (up) => events = up,
+          );
+          Future<void> switchTo(String name) async {
+            await tester.tap(find.text('她').last);
+            await _until2(tester, () => find.text(name).evaluate().isNotEmpty);
+            await tester.ensureVisible(find.text(name).last);
+            await tester.tap(find.text(name).last);
+            await _until2(
+              tester,
+              () =>
+                  File('${store.pack.path}/character/character.json').existsSync() &&
+                  jsonDecode(File('${store.pack.path}/character/character.json').readAsStringSync())['name'] == name,
+            );
+            await _settle(tester);
+            events.onReady();
+            await _until2(tester, () => find.text('和$name说点什么').evaluate().isNotEmpty);
+          }
+
+          void finish(int index, String label) {
+            responses[index].complete(
+              http.StreamedResponse(Stream.value(utf8.encode(_sse([adapterAnswer(label)]))), 200),
+            );
+          }
+
+          events.onProbe!(bareProbe);
+          await _until2(tester, () => find.text('适配').evaluate().isNotEmpty);
+          await tester.tap(find.text('适配'));
+          await _until2(tester, () => responses.length == 1);
+          await switchTo('Bea');
+          events.onProbe!(CompanionProbe.fromJson(bareProbeJson)!);
+          await _until2(tester, () => responses.length == 2);
+          if (returnToFirst) await switchTo('Ann');
+          commands.clear();
+          finish(0, '旧的 Ann');
+          await _settle(tester);
+          final file = companionAdapterFile(store.pack);
+          expect(file.existsSync(), isFalse);
+          expect(find.textContaining('旧的 Ann'), findsNothing);
+          expect(commands.where((command) => command.$1 == 'adapter'), isEmpty);
+          finish(1, '新的 Bea');
+          if (returnToFirst) {
+            await _settle(tester);
+            expect(file.existsSync(), isFalse);
+            expect(commands.where((command) => command.$1 == 'adapter'), isEmpty);
+          } else {
+            await _until2(tester, () => commands.any((command) => command.$1 == 'adapter'));
+            expect((jsonDecode(file.readAsStringSync()) as Map)['notes'], '新的 Bea');
+            expect(find.textContaining('新的 Bea'), findsOneWidget);
+          }
+          await tester.pumpWidget(const SizedBox());
+          await tester.pump(const Duration(seconds: 20));
+        });
+      }
 
       testWidgets('the fitting offer turned down: nothing sent, and not offered again for that model', (tester) async {
         final adapting = <Object>[];

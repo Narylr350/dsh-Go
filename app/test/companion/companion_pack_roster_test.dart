@@ -1,6 +1,7 @@
 // Several characters installed at once: `pack/` is the active one, the others
 // wait on the shelf until the person switches to them.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -129,6 +130,59 @@ void main() {
     expect(_bytes(store.pack), beaBytes);
     expect(await store.unavailableReason(), isNull);
     expect(note().existsSync(), isFalse);
+  });
+
+  test('active pack access and roster swaps share the queue across stores', () async {
+    final ann = await add('Ann');
+    await add('Bea');
+    final other = restarted();
+    final beaRevision = store.activeRevision;
+    final entered = Completer<void>(), release = Completer<void>();
+    final writing = store.withActivePack(beaRevision, (pack) async {
+      entered.complete();
+      await release.future;
+      await File('${pack.path}/character/fit.txt').writeAsString('Bea only');
+      return true;
+    });
+    await entered.future;
+    final switching = other.activate(ann);
+    final stale = store.withActivePack(beaRevision, (_) async => fail('late access entered Ann'));
+    release.complete();
+    expect(await writing, isTrue);
+    await switching;
+    expect(await stale, isNull);
+    expect(File('${store.pack.path}/character/fit.txt').existsSync(), isFalse);
+    final bea = (await store.roster()).last.key;
+    await other.activate(bea);
+    expect(File('${store.pack.path}/character/fit.txt').readAsStringSync(), 'Bea only');
+    expect(await store.withActivePack(beaRevision, (_) async => fail('retired Bea returned')), isNull);
+    final returned = store.activeRevision;
+    await other.removeShelved(ann);
+    expect(await store.withActivePack(returned, (_) async => true), isTrue);
+  });
+
+  test('a late probe during the preceding reader shutdown cannot enter the incoming pack', () async {
+    final ann = await add('Ann');
+    await add('Bea');
+    final entered = Completer<void>(), release = Completer<void>();
+    final first = store.beforeChanges(() async {
+      entered.complete();
+      await release.future;
+    });
+    var oldStageLive = true;
+    final second = store.beforeChanges(() async => oldStageLive = false);
+    addTearDown(first);
+    addTearDown(second);
+    final switching = restarted().activate(ann);
+    await entered.future;
+    expect(oldStageLive, isTrue);
+    final duringShutdown = store.activeRevision;
+    final look = store.withActivePack(duringShutdown, (_) async => fail('old probe entered Ann'));
+    release.complete();
+    await switching;
+    expect(oldStageLive, isFalse);
+    expect(await look, isNull);
+    expect(await store.withActivePack(store.activeRevision, (_) async => true), isTrue);
   });
 
   test('activate refuses a key that is not on the shelf', () async {
