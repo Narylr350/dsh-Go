@@ -926,9 +926,15 @@ void main() {
       room.bridge.callNote = supported;
       await room.open(tester);
       try {
-        tester.widget<CompanionComposer>(find.byType(CompanionComposer)).onCall!();
-        await tester.pump();
+        final button = find.descendant(of: find.byType(CompanionComposer), matching: find.byIcon(AppIcons.call));
+        await tester.tap(button);
         final page = find.byType(VoiceCallPage);
+        // The incoming route is initially laid out offstage. Wait until the visible route has built.
+        for (var frame = 0; frame < 120 && page.evaluate().isEmpty; frame++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(page, findsOneWidget);
+        expect(ModalRoute.of(tester.element(page))?.isCurrent, isTrue);
         final call = tester.widget<VoiceCallPage>(page).conversation as CompanionCallConversation;
         final sent = call.sendVerbatim(text, note);
         expect(sent, isNotNull);
