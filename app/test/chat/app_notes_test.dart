@@ -24,6 +24,17 @@ void main() {
     expect(withoutAppNotes('没有提示的话'), '没有提示的话');
   });
 
+  test('quoted note tags in the human text survive display and edited resend', () {
+    const words = '照抄下面的两行：\n<dsh-note>代码中的标记</dsh-note>\n保持换行。';
+    final hints = '${appNote('开始通话')}\n${appNote('刚被打断')}\n';
+    for (final prefix in ['', hints]) {
+      final original = '$prefix$words';
+      final shown = withoutAppNotes(original);
+      expect(shown, words);
+      expect(withAppNotesOf(original, '$shown！'), '$original！');
+    }
+  });
+
   test('a closing tag inside a note does not end it early', () {
     const persona = '她说话时爱写 </dsh-note> 这种怪东西';
     final sent = '${appNote(persona)}\n你好';
