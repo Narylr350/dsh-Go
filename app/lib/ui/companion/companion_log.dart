@@ -145,9 +145,8 @@ CompanionLogEntry? _her(
 }
 
 /// The backlog over the room. [onLoadOlder] is there while there is more to
-/// fetch (full mode), and [history] counts what has been fetched (every item,
-/// shown or not), so a fetch that brought nothing can be told from one that
-/// brought only what the log leaves out. [onOpenChat] when the conversation
+/// fetch (full mode). [oldestSeq] tracks the oldest loaded event, including
+/// events that produce no conversation row. [onOpenChat] when the conversation
 /// also lives in the main chat, for its tool details.
 class CompanionLog extends StatefulWidget {
   const CompanionLog({
@@ -157,7 +156,7 @@ class CompanionLog extends StatefulWidget {
     required this.onClose,
     this.onLoadOlder,
     this.loadingOlder = false,
-    this.history = 0,
+    this.oldestSeq,
     this.onOpenChat,
     this.scrim,
     this.herTone = companionLogHerTone,
@@ -179,7 +178,7 @@ class CompanionLog extends StatefulWidget {
   final VoidCallback onClose;
   final Future<void> Function()? onLoadOlder;
   final bool loadingOlder;
-  final int history;
+  final int? oldestSeq;
   final VoidCallback? onOpenChat;
 
   @override
@@ -199,7 +198,7 @@ class _CompanionLogState extends State<CompanionLog> {
     final load = widget.onLoadOlder;
     if (load == null || widget.loadingOlder || _fetching) return;
     _fetching = true;
-    final before = widget.history;
+    final before = widget.oldestSeq;
     try {
       await load();
       // What it brought reaches this widget with the next build.
@@ -209,7 +208,8 @@ class _CompanionLogState extends State<CompanionLog> {
     }
     if (!mounted) return;
     _fetching = false;
-    if (widget.history <= before) {
+    final after = widget.oldestSeq;
+    if (before == null || after == null || after >= before) {
       setState(() => _stalled = true);
     } else {
       // Brought something, maybe nothing the log shows: on to the next page.

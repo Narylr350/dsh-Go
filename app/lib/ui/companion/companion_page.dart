@@ -2635,15 +2635,16 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     final id = _sessionId;
     if (!_phoneLog && !_light && id != null) {
       final chat = ref.watch(chatProvider(id));
+      final controller = ref.read(chatProvider(id).notifier);
       return CompanionLog(
         key: ValueKey('log-host:$id'),
         entries: companionLogFromChat(chat.items, emotions: _moves.emotionLabels, actions: _moves.actionLabels),
         name: name,
         onClose: _closeLog,
         onOpenChat: _openFullChat,
-        onLoadOlder: chat.hasMoreHistory ? ref.read(chatProvider(id).notifier).loadOlder : null,
+        onLoadOlder: chat.hasMoreHistory ? controller.loadOlder : null,
         loadingOlder: chat.loadingOlder,
-        history: chat.items.length,
+        oldestSeq: controller.oldestSeq,
       );
     }
     return CompanionLog(

@@ -151,7 +151,8 @@ void main() {
 
   testWidgets('a fetch of earlier history that brings nothing stops; a tap tries again', (tester) async {
     var loads = 0;
-    var history = 1;
+    var oldestSeq = 9;
+    final entries = [const CompanionLogEntry.you('在吗')];
     late StateSetter rebuild;
     await tester.pumpWidget(
       MaterialApp(
@@ -164,11 +165,14 @@ void main() {
             builder: (context, setState) {
               rebuild = setState;
               return CompanionLog(
-                entries: const [CompanionLogEntry.you('在吗')],
+                entries: entries,
                 name: '小鲸',
                 onClose: () {},
-                history: history,
-                onLoadOlder: () async => loads++,
+                oldestSeq: oldestSeq,
+                onLoadOlder: () async {
+                  loads++;
+                  if (loads == 1) rebuild(() => entries.add(const CompanionLogEntry.her('我在。')));
+                },
               );
             },
           ),
@@ -177,22 +181,22 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
-    // Brought nothing: no second try on its own.
+    // A new live reply does not mean that an older page arrived.
     expect(loads, 1);
     await tester.pump();
     expect(loads, 1);
     expect(find.text('加载更早的记录'), findsOneWidget);
     // A page with nothing the log shows still counts as progress.
     await tester.tap(find.text('加载更早的记录'));
-    rebuild(() => history = 5);
+    rebuild(() => oldestSeq = 5);
     await tester.pump();
     await tester.pump();
     expect(loads, greaterThanOrEqualTo(2));
   });
 
-  testWidgets('a fetch whose items land with the next build still counts as progress', (tester) async {
+  testWidgets('older pages with no chat rows keep loading when their cursor lands on the next build', (tester) async {
     var loads = 0;
-    var history = 1;
+    var oldestSeq = 9;
     late StateSetter rebuild;
     await tester.pumpWidget(
       MaterialApp(
@@ -205,15 +209,15 @@ void main() {
             builder: (context, setState) {
               rebuild = setState;
               return CompanionLog(
-                entries: const [CompanionLogEntry.you('在吗')],
+                entries: loads == 3 ? const [CompanionLogEntry.you('最初的话')] : const [],
                 name: '小鲸',
                 onClose: () {},
-                history: history,
+                oldestSeq: oldestSeq,
                 // Three pages, each landing a build after the fetch is over.
                 onLoadOlder: loads < 3
                     ? () async {
                         loads++;
-                        rebuild(() => history += 2);
+                        rebuild(() => oldestSeq -= 2);
                       }
                     : null,
               );
@@ -226,6 +230,7 @@ void main() {
       await tester.pump();
     }
     expect(loads, 3);
+    expect(find.text('最初的话'), findsOneWidget);
     expect(find.text('加载更早的记录'), findsNothing);
   });
 }
