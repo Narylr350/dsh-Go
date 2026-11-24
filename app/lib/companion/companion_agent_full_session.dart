@@ -344,8 +344,10 @@ class _CompanionFullSession {
     bool Function() current,
   ) async {
     if (prepared?.requestId != req) {
-      final persona = visit.ref.read(companionPersonaProvider);
-      final name = visit.ref.read(companionNameProvider) ?? visit.character.name;
+      final identityFor = await companionRequestIdentityReader(visit.ref);
+      if (!current()) return;
+      final persona = identityFor(visit.characterSourceKey);
+      final name = persona.name ?? visit.character.name;
       final whale = companionIsWhale(visit.characterSourceKey, visit.character.name);
       final profile = CompanionContextProfile(
         persona: persona.custom.trim().isNotEmpty || !whale

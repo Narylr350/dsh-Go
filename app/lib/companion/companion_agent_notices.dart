@@ -67,23 +67,23 @@ class _VisitNotices {
   Future<void> start(String path) async {
     _shownNotice = null;
     try {
-      await visit.ref.read(companionPersonaProvider.notifier).ready;
+      final identityFor = await companionRequestIdentityReader(visit.ref);
       if (!current) return;
       final model = CompanionNoticeModel(
         owner: owner,
         client: visit.agent._client,
         apiKey: () => visit.preparing || visit.agent.running ? '' : visit.agent._apiKey(),
         profile: () {
-          final persona = visit.ref.read(companionPersonaProvider);
+          final persona = identityFor(visit.characterSourceKey);
           return CompanionContextProfile(
             persona: persona.custom,
-            name: visit.ref.read(companionNameProvider) ?? visit.character.name ?? '',
+            name: persona.name ?? visit.character.name ?? '',
             callMe: persona.callMe,
             moves: visit.moves.rules() ?? '',
           );
         },
         defaultPersona: () => companionPersonaPart(
-          name: visit.ref.read(companionNameProvider) ?? visit.character.name,
+          name: identityFor(visit.characterSourceKey).name ?? visit.character.name,
           whale: companionIsWhale(visit.characterSourceKey, visit.character.name),
         ),
         onUsage: visit.agent._onUsage,

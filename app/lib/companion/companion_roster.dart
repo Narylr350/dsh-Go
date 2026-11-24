@@ -59,6 +59,29 @@ Map<Object?, Object?>? _saved(SharedPreferences prefs, String key) {
   }
 }
 
+typedef CompanionRequestIdentity = ({String? name, String custom, String callMe});
+
+/// Read the profile at dispatch, including when a room already shows the
+/// next pack and an earlier preference write is still in flight.
+Future<CompanionRequestIdentity Function(String?)> companionRequestIdentityReader(Ref ref) async {
+  ref.read(companionNameProvider.notifier);
+  await ref.read(companionPersonaProvider.notifier).ready;
+  final prefs = await SharedPreferences.getInstance();
+  return (key) {
+    final persona = ref.read(companionPersonaProvider);
+    final owner = prefs.getString(_ownerKey), pending = prefs.getString(_pendingOwnerKey);
+    if (owner != key || (pending != null && pending != key)) {
+      final saved = key == null ? null : _saved(prefs, key);
+      if (owner != null || pending != null || saved != null) {
+        final name = saved?['name'], custom = saved?['custom'];
+        return (name: name is String ? name : null, custom: custom is String ? custom : '', callMe: persona.callMe);
+      }
+    }
+    // The active owner (or the first legacy pack) gets its live edits.
+    return (name: ref.read(companionNameProvider), custom: persona.custom, callMe: persona.callMe);
+  };
+}
+
 /// The owner changes last. If the process stopped before then, replay the
 /// target settings without saving the partially restored values over anyone.
 Future<bool> _finishPending(WidgetRef ref, SharedPreferences prefs) async {

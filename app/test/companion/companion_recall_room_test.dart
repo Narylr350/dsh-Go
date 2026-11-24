@@ -32,6 +32,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 import '../support/companion_notes_peer.dart' show NotesPeer, hostAgentPath;
 import '../support/companion_session_peer.dart';
@@ -296,6 +297,20 @@ class _Sessions extends SessionsController {
   }
 }
 
+class _HandoffPreferences extends InMemorySharedPreferencesStore {
+  _HandoffPreferences(super.data) : super.withData();
+  final savingAnn = Completer<void>(), release = Completer<void>();
+
+  @override
+  Future<bool> setValue(String type, String key, Object value) async {
+    if (key == 'flutter.companion_identity_v1:Ann' && !savingAnn.isCompleted) {
+      savingAnn.complete();
+      await release.future;
+    }
+    return super.setValue(type, key, value);
+  }
+}
+
 class _Room {
   _Room(this.root);
   final Directory root;
@@ -412,6 +427,57 @@ void main() {
   tearDown(() {
     root.deleteSync(recursive: true);
   });
+
+  for (final mode in ['light', 'full']) {
+    testWidgets('$mode room uses the active pack while the old role preference write is pending', (tester) async {
+      const bea = 'local:BBBBBBBBBBBBBBBBBBBBBBBB';
+      const raw = '再说一次。';
+      final previousPlatform = SharedPreferencesStorePlatform.instance;
+      final prefs = _HandoffPreferences({
+        'flutter.companion_mode': mode,
+        'flutter.companion_touch_hint_done': true,
+        'flutter.companion_home_hint_done': true,
+        'flutter.companion_identity_owner': 'Ann',
+        'flutter.companion_name': '阿安',
+        'flutter.companion_persona_v1': jsonEncode({'custom': 'Ann 的原设定', 'callMe': '小林'}),
+        'flutter.companion_identity_v1:$bea': jsonEncode({'name': '阿贝', 'custom': 'Bea 的新设定'}),
+      });
+      SharedPreferencesStorePlatform.instance = prefs;
+      SharedPreferences.resetStatic();
+      addTearDown(() {
+        if (!prefs.release.isCompleted) prefs.release.complete();
+        SharedPreferencesStorePlatform.instance = previousPlatform;
+        SharedPreferences.resetStatic();
+      });
+      final pack = Directory('${root.path}/pack')..createSync();
+      File('${pack.path}/.companion-character.json').writeAsStringSync(jsonEncode({'schema': 1, 'key': bea}));
+      final room = _Room(root);
+      await room.open(tester);
+      try {
+        expect(prefs.savingAnn.isCompleted, isTrue);
+        await room.say(tester, raw);
+        final String sentProfile;
+        if (mode == 'full') {
+          expect(room.client.prompts.single.text, raw);
+          sentProfile = jsonEncode(room.bridge.prepared.single['profile']);
+        } else {
+          final request = room.asked.singleWhere((body) => body['tools'] is List && (body['tools'] as List).isNotEmpty);
+          sentProfile = jsonEncode(request['system']);
+        }
+        expect(sentProfile, contains('阿贝'));
+        expect(sentProfile, contains('Bea 的新设定'));
+        expect(sentProfile, contains('小林'));
+        expect(sentProfile, isNot(contains('阿安')));
+        expect(sentProfile, isNot(contains('Ann 的原设定')));
+        expect(prefs.release.isCompleted, isFalse);
+        expect(room.memory.store.messages().where((row) => row['role'] == 'user').single['text'], raw);
+      } finally {
+        prefs.release.complete();
+        await room.settle(tester);
+        await room.close(tester);
+      }
+    });
+  }
 
   testWidgets('full room sends verbatim to the bound session with one sidecar and one local source', (tester) async {
     final room = _Room(root);

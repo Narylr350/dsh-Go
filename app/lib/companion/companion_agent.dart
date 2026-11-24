@@ -43,6 +43,7 @@ import 'companion_maps.dart';
 import 'companion_moves.dart';
 import 'companion_pack.dart';
 import 'companion_public_lookup.dart';
+import 'companion_roster.dart';
 import 'companion_recall_prefs.dart';
 import 'companion_reminder.dart';
 import 'companion_reply.dart';

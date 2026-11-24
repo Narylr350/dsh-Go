@@ -825,13 +825,13 @@ class _CompanionAgentVisit {
         hasClock: sampledContext.hasClock,
       );
       lastSpokenAt = now;
-      await ref.read(companionPersonaProvider.notifier).ready;
+      final identityFor = await companionRequestIdentityReader(ref);
       if (!current()) return;
-      final persona = ref.read(companionPersonaProvider);
+      final persona = identityFor(characterSourceKey);
       final system = companionLightSystem(
         persona: companionPersona(
           custom: persona.custom,
-          name: ref.read(companionNameProvider) ?? character.name,
+          name: persona.name ?? character.name,
           callMe: persona.callMe,
           tools: true,
           moves: moves.rules(),
@@ -1423,16 +1423,16 @@ class _CompanionAgentVisit {
         // A failed preparation is skipped for this opportunity, not marked
         // asked. The next observation may consider another eligible card.
         followupAttempts.add(captured['id']! as String);
-        await ref.read(companionPersonaProvider.notifier).ready;
+        final identityFor = await companionRequestIdentityReader(ref);
         if (!current() || !presentable(target.initiativeView)) return false;
-        final persona = ref.read(companionPersonaProvider);
+        final persona = identityFor(characterSourceKey);
         line = await owner.followup(
           this,
           captured,
           persona:
               companionPersonaPart(
                 custom: persona.custom,
-                name: ref.read(companionNameProvider) ?? character.name,
+                name: persona.name ?? character.name,
                 callMe: persona.callMe,
                 whale: companionIsWhale(characterSourceKey, character.name),
               ) +
