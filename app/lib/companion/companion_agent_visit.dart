@@ -384,6 +384,13 @@ class _CompanionAgentVisit {
       (residentUi != null || (window?.attached == true && window!.ui.mounted));
 
   DateTime? lastUserInteractionAt;
+  int? lastScreenInteractionMs;
+
+  void _markUserInteraction() {
+    lastUserInteractionAt = DateTime.now();
+    lastScreenInteractionMs = agent.screenPaceNowMs;
+  }
+
 
   CompanionPendingRawErase? get pendingRawErase =>
       active ? memory?.pendingRawErase(this, characterId: characterId) : null;
@@ -694,7 +701,7 @@ class _CompanionAgentVisit {
     final previous = previousSubmission?.source;
     final noticeReply = notices?.replyContext(raw, retrySource: previous?['id'] as String?);
     notices?.invalidate(keepReply: true);
-    lastUserInteractionAt = DateTime.now();
+    _markUserInteraction();
     acted();
     memory?.cancelWork();
     // Take only this visit's drained, no-tool retry before stop retires other
@@ -1188,7 +1195,7 @@ class _CompanionAgentVisit {
 
   void event(String type) {
     if (const {'pet', 'snack', 'play'}.contains(type)) {
-      lastUserInteractionAt = DateTime.now();
+      _markUserInteraction();
       recordInteraction(type);
     }
     final owner = keeper;

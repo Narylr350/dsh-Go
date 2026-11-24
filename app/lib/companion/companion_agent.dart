@@ -129,6 +129,19 @@ class CompanionAgent extends ChangeNotifier {
 
   DateTime? get lastUserInteractionAt => _visit?.lastUserInteractionAt;
   int? get lastUserInteractionAtMs => lastUserInteractionAt?.millisecondsSinceEpoch;
+  int? get lastScreenInteractionMs => _visit?.lastScreenInteractionMs;
+
+  // Use the visit's elapsed clock, including Android deep sleep. If the native clock becomes
+  // unavailable, keep measuring on the Dart stopwatch from the last known time base.
+  final _screenAwake = Stopwatch()..start();
+  int _screenClockOffset = 0;
+  int get screenPaceNowMs {
+    final awake = _screenAwake.elapsedMilliseconds;
+    final elapsed = _visit?.clock().monoMs;
+    if (elapsed != null && elapsed >= 0) _screenClockOffset = elapsed - awake;
+    return awake + _screenClockOffset;
+  }
+
   void Function(String)? onScreenUserText;
   void Function(String requestId, int atMs, double? estimatedCny)? onScreenCost;
   void Function()? onScreenRouteChanged;

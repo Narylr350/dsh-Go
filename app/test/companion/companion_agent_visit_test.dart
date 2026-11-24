@@ -21,6 +21,8 @@ import 'package:dsh_app/companion/companion_pack.dart';
 import 'package:dsh_app/companion/companion_public_lookup.dart';
 import 'package:dsh_app/companion/companion_signal_consent.dart';
 import 'package:dsh_app/companion/companion_signals.dart';
+import 'package:dsh_app/companion/companion_screen_observer.dart';
+import 'package:dsh_app/companion/companion_screen_pace.dart';
 import 'package:dsh_app/companion/companion_state.dart';
 import 'package:dsh_app/companion/companion_voice.dart' show CompanionPhoneLines;
 import 'package:dsh_app/companion/companion_widget.dart';
@@ -773,6 +775,95 @@ Future<_Visit> _shownOffer(List<http.Response> replies) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets('the resident observer still requests a new sample on time after a wall rollback', (tester) async {
+    var wall = _now, elapsed = 10000, permits = 0;
+    final visit = (await tester.runAsync(
+      () => _Visit.open([], clock: () => CompanionInitiativeClock(wallMs: wall, monoMs: elapsed)),
+    ))!;
+    const phone = MethodChannel('dsh/phone'), events = MethodChannel('dsh/companion_screen/state');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(events, (_) async => null);
+    messenger.setMockMethodCallHandler(phone, (call) async {
+      final args = call.arguments as Map?;
+      if (call.method == 'companionScreenState' && args?['op'] == 'permit') {
+        expect(args?['tier'], 'cheap');
+        permits++;
+        return {'allowed': true};
+      }
+      if (call.method == 'companionScreenSample') {
+        if (args?['validate'] != null) return {'status': 'stale'}; // End before the model runs.
+        return {
+          'status': 'observed', 'sample_id': 'sample-$elapsed', 'text': 'sample',
+          'package_name': 'test', 'observed_at_ms': wall, 'capture_method': 'tree',
+        };
+      }
+      return {'enabled': true, 'resident_active': true, 'frequency': 'normal', 'generation': 1};
+    });
+    final observer = CompanionScreenObserver(agent: visit.agent);
+    try {
+      observer.start();
+      await tester.pump();
+      Future<void> poll() async {
+        await tester.pump(const Duration(seconds: 2)); // The resident's normal poll timer.
+        await tester.pump();
+      }
+      await poll();
+      expect(permits, 1);
+      final reference = CompanionScreenPace()..cheapStarted(elapsed);
+      final wait = Iterable<int>.generate(60000, (index) => index + 1)
+          .firstWhere((milliseconds) => reference.cheapDue(elapsed + milliseconds));
+      wall -= const Duration(hours: 6).inMilliseconds;
+      elapsed += wait - 1;
+      await poll();
+      expect(permits, 1);
+      elapsed++;
+      await poll();
+      expect(permits, 2);
+    } finally {
+      observer.dispose();
+      await tester.pump();
+      messenger.setMockMethodCallHandler(phone, null);
+      messenger.setMockMethodCallHandler(events, null);
+      await tester.runAsync(visit.close);
+    }
+  });
+
+  test('screen pacing keeps the remaining interval after the wall clock goes back', () async {
+    var wall = _now, elapsed = 10000;
+    final visit = await _Visit.open([], clock: () => CompanionInitiativeClock(wallMs: wall, monoMs: elapsed));
+    final agent = visit.agent;
+    final pace = CompanionScreenPace(), control = CompanionScreenPace();
+    const reading = CompanionScreenReading(scene: 'coding', mood: '', salience: 1, busy: false, quip: '', emotion: '');
+    pace
+      ..cheapStarted(agent.screenPaceNowMs)
+      ..seriousStarted(agent.screenPaceNowMs);
+    control
+      ..cheapStarted(elapsed)
+      ..seriousStarted(elapsed);
+
+    wall -= const Duration(hours: 6).inMilliseconds;
+    elapsed += 1000;
+    visit.attachment.event('pet');
+    expect(agent.lastScreenInteractionMs, elapsed);
+    pace.userSpoke(agent.lastScreenInteractionMs);
+    control.userSpoke(elapsed);
+    for (final delta in [0, 3000, 12000, 15999, 16000, 23999, 24000, 60000, 120000, 180000]) {
+      elapsed = 11000 + delta;
+      expect(agent.screenPaceNowMs, elapsed);
+      expect(pace.cheapDue(agent.screenPaceNowMs), control.cheapDue(elapsed));
+      expect(
+        pace.seriousDue(agent.screenPaceNowMs, reading, userBusy: false),
+        control.seriousDue(elapsed, reading, userBusy: false),
+      );
+    }
+    expect(pace.cheapDue(agent.screenPaceNowMs), isTrue);
+    expect(pace.seriousDue(agent.screenPaceNowMs, reading, userBusy: false), isTrue);
+
+    final last = agent.screenPaceNowMs;
+    elapsed = -1;
+    expect(agent.screenPaceNowMs, greaterThanOrEqualTo(last), reason: 'an unavailable clock keeps its time base');
+  });
+
   setUp(
     () => SharedPreferences.setMockInitialValues({'companion_mode': 'light', 'companion_initiative_enabled': false}),
   );

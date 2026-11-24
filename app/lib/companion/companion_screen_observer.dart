@@ -224,7 +224,7 @@ class CompanionScreenObserver {
 
   void _userSaid(String words) {
     _cancel();
-    _pace.userSpoke(agent.lastUserInteractionAtMs);
+    _pace.userSpoke(agent.lastScreenInteractionMs);
     final command = words.trim().replaceAll(RegExp(r'[。！!？?]+$'), '');
     final op = command == '别看了'
         ? 'pause'
@@ -287,7 +287,7 @@ class CompanionScreenObserver {
   }
 
   Future<void> _tick() async {
-    _pace.userSpoke(agent.lastUserInteractionAtMs);
+    _pace.userSpoke(agent.lastScreenInteractionMs);
     if (!_enabled) return;
     if (_sampling) {
       await _checkInFlight();
@@ -300,7 +300,7 @@ class CompanionScreenObserver {
       // Capability discovery sends no model request or screen data. Capture
       // pixels only after that explicit route is supported; other routes keep
       // the original text path before any model handoff occurs.
-      final vision = _pace.cheapDue(DateTime.now().millisecondsSinceEpoch) ? await _refreshVision() : null;
+      final vision = _pace.cheapDue(agent.screenPaceNowMs) ? await _refreshVision() : null;
       if (!_enabled || generation != _generation || (vision != null && !vision.isCurrent())) return;
       final sample = await _channel.invokeMapMethod<String, Object?>(
         'companionScreenSample',
@@ -308,7 +308,7 @@ class CompanionScreenObserver {
       );
       if (!_enabled || generation != _generation || sample?['status'] != 'observed') return;
       final token = sample!['sample_id'];
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final now = agent.screenPaceNowMs;
       if (token is! String ||
           sample['text'] is! String ||
           sample['package_name'] is! String ||
@@ -343,7 +343,7 @@ class CompanionScreenObserver {
       // This is only a local same-day activity label; no screenshot or source text.
       await _channel.invokeMethod<Object?>('companionScreenState', {'op': 'note', 'scene': reading.scene});
       if (!_enabled || generation != _generation) return;
-      final spokeAt = DateTime.now().millisecondsSinceEpoch;
+      final spokeAt = agent.screenPaceNowMs;
       var shown = false;
       if (_pace.seriousDue(spokeAt, reading, userBusy: sample['busy'] != false) &&
           await _permit('serious', token) &&
@@ -372,7 +372,7 @@ class CompanionScreenObserver {
           emotion: reading.emotion,
           observedAtMs: sample['observed_at_ms']! as int,
         );
-        if (shown) _pace.shown(DateTime.now().millisecondsSinceEpoch, reading, quip: true);
+        if (shown) _pace.shown(agent.screenPaceNowMs, reading, quip: true);
       }
     } on Object {
       // Physical receipts stay with the Agent. A failed/absent result is not a
