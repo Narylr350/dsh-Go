@@ -508,6 +508,7 @@ class ChatController extends Notifier<ChatState> {
   Object _syncScope = Object();
   SessionFollowEpoch? _followEpoch;
   MuxGeneration? _snapshotGeneration;
+  DshClient? _transcriptClient;
   bool _synchronized = false;
   bool _watchEnded = false;
   Completer<bool> _syncReady = Completer<bool>();
@@ -591,6 +592,7 @@ class ChatController extends Notifier<ChatState> {
       // Retire only the local cards; do not answer or cancel the old Host's work.
       _retireHostRequests();
       _approvalHost = host;
+      _transcriptClient = null;
       _openOutcomes.clear();
       _retryDraft = null;
       _defaultModelSaveFailed = false;
@@ -702,7 +704,10 @@ class ChatController extends Notifier<ChatState> {
 
   void _relisten() {
     final client = _client;
-    if (client != null) _listen(client, ref.read(runPulseProvider(sessionId)));
+    if (client == null) return;
+    // Reconnects keep the same client, while a new Host needs its own first snapshot.
+    final cursor = identical(_transcriptClient, client) ? _transcript.cursor : null;
+    _listen(client, ref.read(runPulseProvider(sessionId)), resumeAfterSeq: cursor);
   }
 
   /// The loaded conversation without its live parts (running, approvals,
@@ -811,7 +816,7 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
-  void _listen(DshClient client, RunPulse pulse, {bool building = false}) {
+  void _listen(DshClient client, RunPulse pulse, {bool building = false, int? resumeAfterSeq}) {
     final owner = ref;
     final listener = _listenOwner = Object();
     _watchEnded = false;
@@ -829,6 +834,7 @@ class ChatController extends Notifier<ChatState> {
           sessionId,
           options: WatchOptions(
             assistantStream: !_quiet,
+            resumeAfterSeq: resumeAfterSeq,
             includeSyncEvents: true,
             activate: true,
             activationAllowed: () {
@@ -924,6 +930,7 @@ class ChatController extends Notifier<ChatState> {
               // A replacement transcript may have the same sequence bounds.
               _lookupKey = null;
               _snapshotGeneration = client.mux.generation;
+              _transcriptClient = client;
               _synchronized = true;
               // One publication: no ready state containing the old inbox.
               _publish(freshSnapshot: true);

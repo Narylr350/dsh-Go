@@ -63,6 +63,7 @@ class TurnWindow {
 class WatchOptions {
   const WatchOptions({
     this.assistantStream = true,
+    this.resumeAfterSeq,
     this.activate = false,
     this.activationAllowed,
     this.onActivationChecked,
@@ -87,6 +88,9 @@ class WatchOptions {
   /// Runs only for an allowed interaction that is still in the same epoch;
   /// callers must not replace the primary follow in response.
   final void Function(bool supported)? onActivationChecked;
+
+  /// Last durable event already held when replacing a watch on this same session.
+  final int? resumeAfterSeq;
 
   /// Receive live token deltas ([AssistantStreamEvent]s).
   final bool assistantStream;
@@ -1005,7 +1009,7 @@ class _Resync implements Exception {
 ///    pending when the stream was opened; after a reconnect they may repeat
 ///    with the same `eventId` (dedupe by it).
 class _SessionWatch {
-  _SessionWatch(this.client, this.sessionId, this.options) {
+  _SessionWatch(this.client, this.sessionId, this.options) : _lastSeq = options.resumeAfterSeq ?? -1 {
     _controller = StreamController<DshEvent>(onListen: _start, onCancel: _stop);
   }
 
@@ -1018,7 +1022,7 @@ class _SessionWatch {
   StreamSubscription<DshConnectionState>? _stateSub;
   MuxStream? _current;
   bool _stopped = false;
-  int _lastSeq = -1;
+  int _lastSeq;
   int? _assistantRevision;
   int _failures = 0;
   int _resyncs = 0;

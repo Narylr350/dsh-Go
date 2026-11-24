@@ -17,8 +17,10 @@ import 'package:dsh_app/runtime/runtime_state.dart';
 import 'package:dsh_app/state/chat_state.dart';
 import 'package:dsh_app/state/connection_state.dart';
 import 'package:dsh_app/state/hosts_state.dart';
+import 'package:dsh_app/state/notify_state.dart' show appForegroundProvider;
 import 'package:dsh_app/state/sessions_state.dart';
 import 'package:dsh_app/ui/shell/home_shell.dart';
+import 'package:dsh_client/dsh_client.dart' show DshClient, UserChatItem;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,6 +99,36 @@ Future<_App> _open(WidgetTester tester) async {
 
 ChatState _chat(WidgetTester tester, String id) =>
     ProviderScope.containerOf(tester.element(find.byType(HomeShell))).read(chatProvider(id));
+
+/// Holds the first reconnect snapshot, then supplies only the last event when
+/// the app opens its quiet follow. Both Hosts deliberately use session S0.
+class _DelayedWindowHost extends FakeHost {
+  _DelayedWindowHost() : super(topLevel: 1, subagents: 0, longTurns: 0);
+
+  bool narrow = false;
+  final narrowedModes = <bool>[];
+
+  @override
+  void onOpen(FakeHostLink link, String streamId, String endpoint, Map<String, Object?> args) {
+    if (!narrow || endpoint != 'session/follow') {
+      super.onOpen(link, streamId, endpoint, args);
+      return;
+    }
+    final request = args['request']! as Map;
+    narrowedModes.add(request['assistantStream'] == true);
+    if (narrowedModes.length == 1) return;
+    final session = sessions['S0']!;
+    link.item(streamId, {
+      'type': 'snapshot',
+      'header': {'version': 4, 'id': session.id, 'createdAt': 0, 'isSeeded': false},
+      'cursor': session.cursor,
+      'records': [session.log.last],
+      'hasMore': true,
+      'projections': {'asOfSeq': session.cursor, 'values': session.projections()},
+      'assistantStream': {'revision': 0},
+    });
+  }
+}
 
 void main() {
   testWidgets('open: the host, the session list and a long conversation', (tester) async {
@@ -202,6 +234,70 @@ void main() {
     expect(chat.running, isFalse);
     await app.close();
   });
+
+  for (final switchHost in [false, true]) {
+    testWidgets('quiet during a delayed baseline keeps only the owning Host history: switch=$switchHost', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final first = _DelayedWindowHost();
+      final next = switchHost ? _DelayedWindowHost() : first;
+      final client = DshClient.withCarrier(FakeTunnelCarrier(first));
+      final nextClient = switchHost ? DshClient.withCarrier(FakeTunnelCarrier(next)) : client;
+      const a = HostRef.relay('a');
+      const b = HostRef.relay('b');
+      final c = ProviderContainer(
+        overrides: [
+          activeConnectionProvider.overrideWith((ref) {
+            final selected = ref.watch(activeHostProvider);
+            return AsyncData(HostConnection(client: selected == a ? client : nextClient, isLocal: false));
+          }),
+        ],
+      );
+      try {
+        final session = first.sessions['S0']!;
+        session.event('turn/start', {'turn': 1});
+        session.event('user/message', {
+          'role': 'user',
+          'id': 'a-message',
+          'source': {'kind': 'user', 'rpcId': 'a-request'},
+          'content': [
+            {'type': 'text', 'text': 'only on A'},
+          ],
+        });
+        c.read(activeHostProvider.notifier).select(a);
+        final state = c.listen(chatProvider('S0'), (_, _) {});
+        Future<void> until(bool Function() ready) async {
+          for (var i = 0; i < 100 && !ready(); i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(ready(), isTrue);
+        }
+
+        bool hasQuote() => state.read().items.whereType<UserChatItem>().any((item) => item.requestId == 'a-request');
+        await until(() => state.read().controlReady && state.read().running);
+        expect(hasQuote(), isTrue);
+        next.sessions['S0']!.event('session/title', {'title': 'latest'});
+        next.narrow = true;
+        if (switchHost) {
+          c.read(activeHostProvider.notifier).select(b);
+        } else {
+          first.drop();
+        }
+        await until(() => next.narrowedModes.isNotEmpty);
+        expect(state.read().controlReady, isFalse);
+        c.read(appForegroundProvider.notifier).set(false);
+        await tester.pump(const Duration(seconds: 30));
+        await until(() => state.read().controlReady);
+        expect(next.narrowedModes, [true, false]);
+        expect(hasQuote(), !switchHost);
+      } finally {
+        c.dispose();
+        await client.close();
+        if (switchHost) await nextClient.close();
+      }
+    });
+  }
 
   testWidgets('a short trip away keeps the stream as it is', (tester) async {
     final app = await _open(tester);
