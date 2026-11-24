@@ -381,6 +381,13 @@ void main() {
     });
   });
 
+  test('system speech parts can always fit a UTF-16 pair', () {
+    for (final limit in [-1, 0, 1]) {
+      expect(() => companionSystemSpeechParts('🐳', limit: limit).first, throwsRangeError);
+    }
+    expect(companionSystemSpeechParts('a🐳b', limit: 2), ['a', '🐳', 'b']);
+  });
+
   group('speaker', () {
     const channel = MethodChannel('dsh/companion_voice');
     late List<MethodCall> calls;

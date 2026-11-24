@@ -549,6 +549,7 @@ final companionSentenceEnd = RegExp(r'[。！？!?…~～]');
 /// Lossless, bounded pieces for the phone's synthesizer. Keep surrogate pairs
 /// together and prefer the last sentence end inside the available space.
 Iterable<String> companionSystemSpeechParts(String text, {int limit = _systemSpeechLimit}) sync* {
+  if (limit < 2) throw RangeError.range(limit, 2, null, 'limit');
   for (var start = 0; start < text.length;) {
     var end = text.length;
     if (end - start > limit) {
