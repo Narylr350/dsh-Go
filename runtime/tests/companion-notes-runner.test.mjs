@@ -172,12 +172,25 @@ test('SOURCE_INTEGRATION a drained unknown model receipt does not prevent stoppi
   assert.equal(snapshot(f).steps.find(value => value.stepKey === 'model').state, 'unknown');
   assert.equal(f.counters.links, 0);
 });
-test('SOURCE_INTEGRATION original absolute deadline stops preparation without a physical model request', async t => {
+test('SOURCE_INTEGRATION original absolute deadline stops preparation without a physical model request', {timeout: 15000}, async t => {
+  t.mock.timers.enable({apis: ['Date', 'setTimeout'], now: Date.now()});
+  const preparing = Promise.withResolvers();
   const f = await fixture(t, {prepare: async ({signal}) => {
-    await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+    const aborted = new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+    preparing.resolve(signal);
+    await aborted;
   }});
   f.body.deadlineAtMs = Date.now() + 400;
-  await launch(f); await until(() => snapshot(f).state === 'failed', 'original deadline terminal');
+  const runner = f.start();
+  await f.store.create(f.body);
+  const signal = await preparing.promise;
+  assert.equal(f.counters.modelCalls, 0);
+  t.mock.timers.tick(399);
+  assert.equal(signal.aborted, false);
+  t.mock.timers.tick(1);
+  assert.equal(signal.aborted, true);
+  await runner.wake(f.body.taskId);
+  assert.equal(snapshot(f).state, 'failed');
   assert.equal(snapshot(f).waitReason, 'deadline_expired'); assert.equal(f.counters.modelCalls, 0); assert.equal(f.counters.links, 0);
 });
 for (const complete of [false, true]) test('SOURCE_INTEGRATION cancel during model retains old ' + (complete ? 'complete' : 'unconfirmed') + ' outcome without publishing', async t => {
@@ -198,14 +211,26 @@ for (const complete of [false, true]) test('SOURCE_INTEGRATION cancel during mod
   assert.equal(old.result.observations.findLast(value => value.type === 'model-finish').usage.complete, complete);
   assert.equal(snapshot(f).taskRev, 2); assert.equal(f.counters.links, 0);
 });
-test('SOURCE_INTEGRATION original deadline after dispatch retains unknown original model result', async t => {
+test('SOURCE_INTEGRATION original deadline after dispatch retains unknown original model result', {timeout: 15000}, async t => {
+  t.mock.timers.enable({apis: ['Date', 'setTimeout'], now: Date.now()});
+  const dispatched = Promise.withResolvers();
   const f = await fixture(t, {async *stream({signal, observer}) {
-    await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+    const aborted = new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+    dispatched.resolve(signal);
+    await aborted;
     observer.observe({type: 'usage', event: 'message_delta', raw: {output_tokens: 29}});
     throw signal.reason;
   }});
   f.body.deadlineAtMs = Date.now() + 400;
-  const runner = f.start(); await f.store.create(f.body); await runner.wake(f.body.taskId);
+  const runner = f.start();
+  await f.store.create(f.body);
+  const signal = await dispatched.promise;
+  assert.equal(f.counters.modelCalls, 1);
+  t.mock.timers.tick(399);
+  assert.equal(signal.aborted, false);
+  t.mock.timers.tick(1);
+  assert.equal(signal.aborted, true);
+  await runner.wake(f.body.taskId);
   const old = snapshot(f).steps.find(value => value.stepKey === 'model');
   assert.equal(snapshot(f).state, 'unknown'); assert.equal(old.state, 'unknown');
   assert.equal(old.reason, 'deadline_expired'); assert.notEqual(old.finishedAtMs, null);
