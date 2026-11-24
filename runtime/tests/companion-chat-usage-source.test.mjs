@@ -30,7 +30,11 @@ sourceTest('ordinary marked request uses actual AsyncLocal ownership, preserves 
   assert.equal(f.requests[0].body.extension_synthetic, 123);
   assert.deepEqual(f.requests[0].body.tools, [{ name: tools[0].name, description: tools[0].description, input_schema: tools[0].parameters }]);
   assert.equal(f.requests[0].init.headers['x-deepseek-harness-session-id'], 'chat-session');
-  assert.equal(chunks.at(-1).reason.kind, 'stop'); assert.equal(chunks.find(c => c.type === 'usage').usage.inputTokens, 11);
+  assert.equal(chunks.at(-1).reason.kind, 'stop');
+  const usage = chunks.filter(chunk => chunk.type === 'usage').map(chunk => chunk.usage);
+  assert.deepEqual(usage.map(value => [value.inputTokens, value.outputTokens, value.totalTokens]), [
+    [3, 0, undefined], [11, 7, undefined], [11, 7, 31],
+  ]);
   assert.equal(result.state, 'settled'); assert.equal(result.complete, true);
   assert.equal(result.physicalRequests, 1); assert.equal(result.observedAdapterCalls, 1); assert.equal(result.activeCalls, 0);
   assert.deepEqual(receipt.requestIds, ['phone-request']); assert.equal(receipt.observation, 'fetch-invoked');
@@ -60,7 +64,10 @@ sourceTest('final usage followed by EOF remains known while the response is inco
   f.prepare(); f.claim(); const chunks = await f.run();
   const result = finish(f), receipt = result.receipts[0];
   assert.equal(chunks.at(-1).reason.failure.code, 'STREAM_CLOSED');
-  assert.equal(chunks.some(c => c.type === 'usage'), false);
+  const usage = chunks.filter(chunk => chunk.type === 'usage').map(chunk => chunk.usage);
+  assert.deepEqual(usage.map(value => [value.inputTokens, value.outputTokens, value.totalTokens]), [
+    [3, 0, undefined], [3, 7, undefined],
+  ]);
   assert.equal(result.complete, true, 'physical coverage can be closed while the provider response is incomplete');
   assert.equal(receipt.complete, false); assert.equal(receipt.terminal, 'incomplete');
   assert.equal(receipt.usage.final_usage.original, 'final'); assert.equal(receipt.usage.output_tokens, 7);
@@ -141,7 +148,9 @@ sourceTest('the selected real PiAiAdapter retains normalized data separately and
   assert.deepEqual(result.gaps, ['physical-count-unknown']); assert.equal(receipt.dispatched, null);
   assert.equal(receipt.observation, 'adapter-invoked'); assert.equal(receipt.usage.final_usage, null);
   assert.equal(receipt.usage.input_uncached, null); assert.equal(receipt.usage.output_tokens, null);
-  assert.deepEqual(receipt.usage.runtime_normalized_usage, [{ inputTokens: 4, outputTokens: 2, totalTokens: 6 }]);
+  assert.deepEqual(receipt.usage.runtime_normalized_usage, [{ inputTokens: 4, outputTokens: 2, totalTokens: 6,
+    reported: { inputTokens: 4, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  }]);
   assert.equal(receipt.usage.runtime_normalized_usage_semantics, 'runtime-normalized-events');
 });
 

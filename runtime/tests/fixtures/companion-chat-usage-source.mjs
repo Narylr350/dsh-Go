@@ -61,12 +61,14 @@ export async function loadChatSource(root, fetch, lookupWindow = false) {
   const source = [
     between(llm, '//#region dsh-go companion recall admission', '//#endregion'),
     ...['message', 'error', 'content', 'attribution', 'call-config', 'adapter-failure'].map(name => region(llm, name)),
+    between(llm, 'const DEFAULT_MAX_RETRIES =', 'const backoffSchema ='),
+    between(llm, 'const NORMAL_POLICY_KEYS =', '//#endregion'),
     between(llm, 'var LlmError = class', '/**\n* Accept one supplied credential'),
     between(llm, 'let LlmRuntime = (() =>', '/** Copy a directory entry'),
     ...['image-tokens', 'request-pricing', 'model-info', 'messages-api', 'request-files', 'request-extensions', 'images', 'replay',
       'serialize', 'transport', 'sse', 'translate', 'adapter'].map(name => region(deepseek, name)),
     region(agent, 'archive-admission'), region(agent, 'index'),
-    'export { LlmRuntime, DeepSeekAdapter, LlmError, AgentRegistry, dshGoRecall, markAgentLoopRequest, createUserMessage, attributionHeaders, contentHasImage, projectOffloadedImages, isQuotaExceededError, isContextWindowExceededError, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, QUOTA_EXCEEDED_CODE };',
+    'export { LlmRuntime, DeepSeekAdapter, LlmError, AgentRegistry, dshGoRecall, markAgentLoopRequest, createUserMessage, resolveRetryPolicy, attributionHeaders, contentHasImage, projectOffloadedImages, isQuotaExceededError, isContextWindowExceededError, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, QUOTA_EXCEEDED_CODE };',
   ].join('\n');
   const slot = `companion-chat-source-${randomUUID()}`;
   globalThis[Symbol.for(slot)] = globals;
