@@ -412,6 +412,38 @@ void main() {
       expect(store.cards().single['text'], '咖啡现在喝半糖');
     });
 
+    test('a ready backlog reads past oversized pages without pricing its untouched tail', () {
+      for (var i = 0; i < 40; i++) {
+        submit('long-$i', 'raw:oversized-$i');
+      }
+      for (var i = 0; i < 36; i++) {
+        submit('short-$i', 'raw:small-$i');
+      }
+      final readyChecks = <String>[];
+      int price(String text) {
+        if (text.startsWith('raw:')) {
+          readyChecks.add(text);
+          return 1;
+        }
+        return text.contains('raw:oversized-') ? memoryBatchInputTokens + 1 : 24;
+      }
+      final first = store.nextBatch(estimateTokens: price)!;
+      expect(first.sources.map((row) => row['id']), [for (var i = 0; i < 32; i++) 'short-$i']);
+      expect(events().take(40).every((row) => row['reason'] == 'input_too_long'), isTrue);
+      expect(readyChecks, isEmpty);
+      reopen();
+      final restored = store.nextBatch(estimateTokens: price)!;
+      expect(restored.id, first.id);
+      expect(restored.sources, first.sources);
+      expect(store.commitExtraction(restored, parsed(restored)), isTrue);
+      expect(store.nextBatch(estimateTokens: price), isNull);
+      expect(readyChecks, [for (var i = 32; i < 36; i++) 'raw:small-$i']);
+      readyChecks.clear();
+      final tail = store.nextBatch(forceTail: true, estimateTokens: price)!;
+      expect(tail.sources.map((row) => row['id']), [for (var i = 32; i < 36; i++) 'short-$i']);
+      expect(readyChecks, isEmpty);
+    });
+
     test('only real user inputs count toward eight, and a 1500-token source also triggers', () {
       for (var n = 0; n < 7; n++) {
         submit('u$n', '短句 $n');

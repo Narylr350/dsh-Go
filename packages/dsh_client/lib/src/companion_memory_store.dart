@@ -1534,20 +1534,29 @@ class CompanionMemoryStore {
       [archive['history_after_seq']],
     );
     _advanceCursor();
-    final pending = _db.select('''
+    ResultSet pendingAfter(int sequence) => _db.select('''
       SELECT m.*,e.queued_at_ms,e.format_failures FROM memory_events e JOIN memory_messages m
         ON m.id=e.message_id AND m.source_rev=e.source_rev AND m.event_seq=e.seq
-      WHERE e.state='pending' ORDER BY e.seq
-    ''');
-    if (pending.isEmpty) return null;
-    final sourceTokens = pending.fold<int>(0, (sum, row) => sum + estimateTokens(row['text'] as String));
-    final latest = pending.map((row) => row['queued_at_ms'] as int).reduce(math.max);
+      WHERE e.state='pending' AND e.seq>? ORDER BY e.seq LIMIT ?
+    ''', [sequence, memoryBatchMessageLimit]);
+    final firstPage = pendingAfter(0);
+    if (firstPage.isEmpty) return null;
     if (!forceTail &&
-        pending.first['format_failures'] == 0 &&
-        pending.length < 8 &&
-        sourceTokens < 1500 &&
-        at - latest < 120000) {
+        firstPage.first['format_failures'] == 0 &&
+        firstPage.length < 8 &&
+        at - firstPage.map((row) => row['queued_at_ms'] as int).reduce(math.max) < 120000 &&
+        firstPage.fold<int>(0, (sum, row) => sum + estimateTokens(row['text'] as String)) < 1500) {
       return null;
+    }
+    // An oversized source is skipped. Continue past this page if later whole
+    // sources may fit, without loading the rest of the queue in advance.
+    Iterable<Row> pendingRows() sync* {
+      var page = firstPage;
+      while (page.isNotEmpty) {
+        yield* page;
+        if (page.length < memoryBatchMessageLimit) return;
+        page = pendingAfter(page.last['event_seq'] as int);
+      }
     }
     final id = _createId();
     final control = archive['control_revision'] as int;
@@ -1561,10 +1570,10 @@ class CompanionMemoryStore {
             processedAtUtc: at,
           ))}',
         );
-    for (final row in pending) {
+    for (final row in pendingRows()) {
       // An edited/stale batch can leave an old retry ahead of fresh events.
       // Its final permitted attempt must not consume a fresh event's retry.
-      if (sources.length == memoryBatchMessageLimit || row['format_failures'] != pending.first['format_failures']) {
+      if (row['format_failures'] != firstPage.first['format_failures']) {
         break;
       }
       final source = Map<String, Object?>.from(row)
@@ -1578,6 +1587,7 @@ class CompanionMemoryStore {
       }
       if (size([...sources, source], const []) > memoryBatchInputTokens) break;
       sources.add(source);
+      if (sources.length == memoryBatchMessageLimit) break;
     }
     _advanceCursor();
     if (sources.isEmpty) return null;
