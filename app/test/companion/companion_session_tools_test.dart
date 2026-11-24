@@ -36,8 +36,14 @@ class _ConflictBody extends DshConnection {
   }
 }
 
+class _Loopback extends HttpOverrides {}
+
+void _testLoopback(String name, Future<void> Function() body) {
+  test(name, () => HttpOverrides.runWithHttpOverrides(body, _Loopback()));
+}
+
 void main() {
-  test('a paired HTTP stream dispatches only its offered call and reports its real result', () async {
+  _testLoopback('a paired HTTP stream dispatches only its offered call and reports its real result', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final replies = StreamController<Map<String, Object?>>();
     final resultFrames = StreamIterator(replies.stream);
@@ -114,7 +120,7 @@ void main() {
     await stream.close();
   });
 
-  test('a device conflict keeps its host reason, while a repeated request can reconcile the original turn', () async {
+  _testLoopback('a device conflict keeps its host reason, while a repeated request can reconcile the original turn', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final client = DshClient(DshConnection(Uri.parse('http://127.0.0.1:${server.port}')));
     var attempts = 0;
