@@ -14,12 +14,24 @@ void main() {
 
   test('a light conversation: her words without marks, theirs without the aside', () {
     final log = companionLogFromLight([
-      CompanionLine.user('$aside\n摸摸'),
+      CompanionLine.fromJson({'role': 'user', 'text': '$aside\n摸摸'}, version: 1)!,
       const CompanionLine.her('[表情:害羞][动作:低头]别、别摸啦……'),
       const CompanionLine.her('[表情:开心]'),
-      CompanionLine.user(aside),
+      const CompanionLine.user(''),
     ]);
     expect(log, const [CompanionLogEntry.you('摸摸'), CompanionLogEntry.her('别、别摸啦……')]);
+  });
+
+  test('the phone log preserves quoted timelines after loading or migrating a user line', () {
+    final quote = '我的原文：\n$aside\n这一行也请保留。';
+    final old = CompanionLine.fromJson({'role': 'user', 'text': '$aside\n$quote'}, version: 1)!;
+    final saved = CompanionLine.fromJson({'role': 'user', 'text': quote}, version: 2)!;
+    expect(old.legacyText, '$aside\n$quote');
+    expect(companionLogFromLight([old, saved, CompanionLine.user(aside)]), [
+      CompanionLogEntry.you(quote),
+      CompanionLogEntry.you(quote),
+      CompanionLogEntry.you(aside),
+    ]);
   });
 
   test('a full-mode session: what she did on the host sits between the lines', () {

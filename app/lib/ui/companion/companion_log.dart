@@ -69,8 +69,8 @@ class CompanionLogEntry {
 
 enum CompanionLogSpeaker { her, you, narration }
 
-/// The log of a light conversation, kept on this phone. Her marks are taken
-/// out; so is the aside the page put in front of the person's lines.
+/// The phone keeps the person's words verbatim. Known v1 asides have
+/// already been removed by the history reader; her marks are for the stage.
 /// [speaking]: what she is saying right now, still arriving.
 List<CompanionLogEntry> companionLogFromLight(
   List<CompanionLine> lines, {
@@ -81,8 +81,8 @@ List<CompanionLogEntry> companionLogFromLight(
   for (final line in lines)
     if (line.fromHer)
       ?_her(line.text, emotions, actions)
-    else if (companionSaidText(line.text) case final said when said.isNotEmpty)
-      CompanionLogEntry.you(said),
+    else if (line.text.isNotEmpty)
+      CompanionLogEntry.you(line.text),
   if (speaking != null) ?_her(speaking, emotions, actions, streaming: true),
 ];
 
