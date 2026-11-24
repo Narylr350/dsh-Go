@@ -394,6 +394,9 @@ class _Room {
   Future<void> close(WidgetTester tester) async {
     if (closed) return;
     closed = true;
+    // Deliver focus loss while EditableText can still read its View.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pump();
     await tester.pumpWidget(const SizedBox());
     phone.releaseGates();
     await tester.pump(const Duration(seconds: 15));
