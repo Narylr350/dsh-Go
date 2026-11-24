@@ -851,8 +851,9 @@ class _CompanionAgentVisit {
         isCurrent: current,
         onCommitted: agent.confirmControlRevision,
         forgottenNotice: origin.forgottenNotice,
-        semanticRecall: (query) => owner.recallIds(
+        semanticRecall: (query, {required includeNotices}) => owner.recallIds(
           query,
+          includeNotices: includeNotices,
           explicitUserInput: source['text']! as String,
           characterId: source['character_id'] as String?,
           isCurrent: () => current() && memoryTools?.isCurrent == true,

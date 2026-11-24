@@ -173,7 +173,9 @@ class CompanionMemoryOwner extends ChangeNotifier {
         isCurrent: current,
         onMaintenanceCommitted: onCommitted,
         forgottenNotice: '',
-        semanticRecall: (query) => recallIds(query, characterId: turn['character_id'] as String?, isCurrent: current),
+        semanticRecall: (query, {required includeNotices}) => recallIds(
+          query, characterId: turn['character_id'] as String?, isCurrent: current, includeNotices: includeNotices,
+        ),
       ),
     );
   }
@@ -361,6 +363,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
   Future<List<String>?> recallIds(
     String query, {
     String? explicitUserInput,
+    bool includeNotices = true,
     required String? characterId,
     required bool Function() isCurrent,
   }) async {
@@ -371,6 +374,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
       characterId: characterId,
       query: query,
       explicitInput: explicitUserInput,
+      includeNotices: includeNotices,
       isCurrent: current,
       limit: null, // The recall transaction filters and budgets the actual grant.
     );
@@ -401,6 +405,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
             characterId: characterId,
             query: input,
             explicitInput: explicitUserInput,
+            includeNotices: includeNotices,
             isCurrent: current,
             limit: null, // Lower-ranked short cards can still fit the prompt budget.
           );

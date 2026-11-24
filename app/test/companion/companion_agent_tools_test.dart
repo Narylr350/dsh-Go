@@ -165,7 +165,7 @@ void main() {
       source: source,
       isCurrent: () => true,
       forgottenNotice: '好，忘掉了。',
-      semanticRecall: (query) {
+      semanticRecall: (query, {required includeNotices}) {
         queries++;
         return held.future;
       },
@@ -191,7 +191,7 @@ void main() {
       source: say('cancelled-rank', '再看看绿色。'),
       isCurrent: () => true,
       forgottenNotice: '好，忘掉了。',
-      semanticRecall: (_) => Future<List<String>?>.error(StateError('retrieval cancelled')),
+      semanticRecall: (_, {required includeNotices}) => Future<List<String>?>.error(StateError('retrieval cancelled')),
       onCommitted: ({required memory, required sourceId, required beforeRevision, required revision}) {},
     );
     final failed = await cancelled.execute(
@@ -201,6 +201,30 @@ void main() {
     expect(jsonDecode(failed.content), containsPair('code', 'recall_unavailable'));
     expect(memory.store.agentToolCall(turnId: cancelled.turnId, callId: 'fail'), isNull);
     cancelled.close();
+  });
+
+  test('maintenance recall ranks only the cards available to its turn', () async {
+    say('maintenance-rank-source', '下午去图书馆。');
+    final claim = memory.store.nextAgentMaintenance(
+      kind: 'extract', offsetMinutes: 0, estimateTokens: (text) => text.length, forceTail: true,
+    )!;
+    final turn = memory.store.beginAgentMaintenance(kind: 'extract', claimId: claim['id']! as String);
+    final domains = <bool>[];
+    final tools = CompanionAgentMemoryTools.maintenance(
+      memory: memory, turn: turn, isCurrent: () => true, forgottenNotice: '',
+      onMaintenanceCommitted: ({required memory, required turnId, required beforeRevision, required revision}) {},
+      semanticRecall: (query, {required includeNotices}) async {
+        domains.add(includeNotices);
+        return const [];
+      },
+    );
+    try {
+      final result = await tools.execute(const CompanionAgentToolCall(id: 'query', name: 'recall', input: {'query': '图书馆'}));
+      expect(result.isError, isFalse);
+      expect(domains, [false]);
+    } finally {
+      tools.close();
+    }
   });
 
   test(

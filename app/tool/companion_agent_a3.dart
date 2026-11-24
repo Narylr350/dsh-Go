@@ -540,8 +540,9 @@ class _Replay {
           isCurrent: isTurnCurrent,
           onCommitted: currentAgent.confirmControlRevision,
           forgottenNotice: '已忘记。',
-          semanticRecall: (query) => memory.recallIds(
+          semanticRecall: (query, {required includeNotices}) => memory.recallIds(
             query,
+            includeNotices: includeNotices,
             explicitUserInput: source['text']! as String,
             characterId: role,
             isCurrent: isTurnCurrent,

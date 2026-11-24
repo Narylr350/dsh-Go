@@ -133,11 +133,16 @@ void main() {
       final allowedPhoneIds = notices.map((row) => row['id']).toSet();
       expect(phone.ids, isNotEmpty);
       expect(phone.ids.every(allowedPhoneIds.contains), isTrue);
+      List<Object?> cachedCards() =>
+          database.select('SELECT card_id FROM memory_embeddings').map((row) => row['card_id']).toList();
+      expect(cachedCards(), unorderedEquals([fact['id'], ...allowedPhoneIds]));
+      store.clearMemoryEmbeddings(modelKey: 'notice-budget');
       if (promptOnly) {
         final host = await memory.selectForAgent(
           '灯塔路线', characterId: a, offsetMinutes: 0, isCurrent: () => true, includeNotices: false,
         );
         expect(host.ids, [fact['id']]);
+        expect(cachedCards(), [fact['id']]);
         expect(host.block, isNot(contains('灯塔开放通知')));
         expect(host.block, isNot(contains(foreign['text']! as String)));
         return;
@@ -150,13 +155,16 @@ void main() {
         final tools = CompanionAgentMemoryTools(
           memory: memory, source: source, isCurrent: () => true, forgottenNotice: '',
           onCommitted: ({required memory, required sourceId, required beforeRevision, required revision}) {},
-          semanticRecall: (query) => memory.recallIds(query, characterId: a, isCurrent: () => true),
+          semanticRecall: (query, {required includeNotices}) => memory.recallIds(
+            query, characterId: a, isCurrent: () => true, includeNotices: includeNotices,
+          ),
         );
         final call = CompanionAgentToolCall(id: 'same-read', name: 'recall', input: const {'query': '灯塔路线'},
             forHostSession: forHost);
         for (final result in [await tools.execute(call), await tools.execute(call)]) {
           expect(result.isError, isFalse);
           expect(result.externalNoticeContent, !forHost);
+          if (forHost) expect(cachedCards(), [fact['id']]);
           final rows = (jsonDecode(result.content) as Map)['selection']['items'] as List;
           final expected = forHost ? [fact['id']] : phone.ids;
           expect(rows.map((row) => row['id']), expected);

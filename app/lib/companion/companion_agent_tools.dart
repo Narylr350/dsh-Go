@@ -73,7 +73,7 @@ class CompanionAgentMemoryTools {
   final CompanionMemoryOwner memory;
   final String? sourceId;
   final String forgottenNotice;
-  final Future<List<String>?> Function(String query)? semanticRecall;
+  final Future<List<String>?> Function(String query, {required bool includeNotices})? semanticRecall;
   final bool Function() _isCurrent;
   final CompanionAgentMemoryCommit? _onCommitted;
   final CompanionAgentMaintenanceCommit? _onMaintenanceCommitted;
@@ -187,7 +187,7 @@ class CompanionAgentMemoryTools {
     final query = call.input['query'];
     if (call.name == 'recall' && rank != null && query is String) {
       try {
-        rankedRecallIds = await rank(query);
+        rankedRecallIds = await rank(query, includeNotices: !call.forHostSession && _originKind == 'chat');
       } on Object {
         return _failure('recall_unavailable');
       }
