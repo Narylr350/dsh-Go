@@ -593,6 +593,7 @@ class ChatController extends Notifier<ChatState> {
       _retireHostRequests();
       _approvalHost = host;
       _transcriptClient = null;
+      _model = null;
       _openOutcomes.clear();
       _retryDraft = null;
       _defaultModelSaveFailed = false;

@@ -149,6 +149,21 @@ void main() {
     expect(h.b.answers, isEmpty);
   }));
 
+  test('a fresh same-named session on B has no model selection from A', () => scenario((h) async {
+    final socket = h.a.host.sockets.last;
+    final follow = socket.received.lastWhere((frame) => frame['endpoint'] == 'session/follow');
+    socket.item(follow['streamId']! as String, {
+      'type': 'event',
+      'event': {
+        'type': 'model/selection', 'seq': 1, 'time': 1792700000001,
+        'data': {'provider': 'test-a', 'model': 'a-only', 'reasoningEffort': 'high'},
+      },
+    });
+    await waitSync(() => h.state.model?.model == 'a-only', 'session A selection');
+    await h.select(_remote, h.b);
+    expect(h.state.model, isNull);
+  }));
+
   test('host selection must not grant the same named B session auto approval', () => scenario((h) async {
     await h.enable();
     await h.select(_remote, h.b);
