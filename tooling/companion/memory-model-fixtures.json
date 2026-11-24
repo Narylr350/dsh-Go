@@ -56,11 +56,11 @@
     },
     {
       "path": "app/test/companion/companion_page_test.dart",
-      "sha256": "e30557dfefb6fe8cff6990c35a6f01043e68f1a0a381e98cffc89f3ebc89e44d"
+      "sha256": "9a7f401df00873d0d11e689fcd23c7c792d526b382c652003fb3e91c11599c56"
     },
     {
       "path": "app/test/companion/companion_recall_room_test.dart",
-      "sha256": "015639b6e0a6979c3ed027dbf69810204bdc289d874753770d8365554e683af3"
+      "sha256": "d04690c1713b1243b6559519a368c7aa30ea1d425ad6f37932016a1585616664"
     },
     {
       "path": "app/test/companion/companion_signal_initiative_test.dart",
