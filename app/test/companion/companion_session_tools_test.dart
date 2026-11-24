@@ -23,7 +23,7 @@ class _Notices implements CompanionNotices {
 
 class _ConflictBody extends DshConnection {
   _ConflictBody() : super(Uri.parse('http://127.0.0.1'));
-  final body = StreamController<Uint8List>();
+  final body = StreamController<Uint8List>.broadcast();
   late DshHttpAbort request;
 
   @override
@@ -138,6 +138,33 @@ void main() {
         .having((e) => e.detail, 'reason', reason)));
     expect(await open(), isNull);
     expect(attempts, 2);
+  });
+
+  testWidgets('a device conflict rejects an oversized body before the Host finishes sending', (tester) async {
+    final connection = _ConflictBody();
+    final client = DshClient(connection);
+    addTearDown(() async {
+      await connection.body.close();
+      await client.close();
+    });
+    final rejected = expectLater(
+      CompanionSessionTools.open(
+        client, sessionId: 'cabin', requestId: 'turn', isCurrent: () => true,
+        tools: [companionNotifyTool(deliver: (_, _) => throw StateError('no call was offered'))],
+      ),
+      throwsA(isA<DshProtocolException>()),
+    );
+    await tester.pump();
+    // Truncating this otherwise valid, padded conflict would accept a duplicate request.
+    final json = utf8.encode('{"error":{"code":"companion/device-request-in-use"}}');
+    final first = Uint8List(16 * 1024)..fillRange(0, 16 * 1024, 32)..setAll(0, json);
+    connection.body.add(first);
+    await tester.pump();
+    expect(connection.request.isAborted, isFalse);
+    connection.body.add(Uint8List.fromList([32]));
+    await tester.pump();
+    await rejected;
+    expect(connection.request.isAborted, isTrue);
   });
 
   testWidgets('a partial conflict reply releases the phone handshake on its original deadline', (tester) async {

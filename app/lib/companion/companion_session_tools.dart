@@ -44,6 +44,7 @@ class CompanionSessionTools {
     'receipts_to_sheet',
   };
   static const _handshakeTimeout = Duration(seconds: 8);
+  static const _maxConflictBytes = 16 * 1024;
 
   final DshConnection _connection;
   final String _session, _request;
@@ -92,7 +93,14 @@ class CompanionSessionTools {
         return null;
       }
       if (response.statusCode == 409) {
-        final bytes = await response.body.expand((chunk) => chunk).toList().timeout(_handshakeTimeout);
+        final bytes = await response.body
+            .expand((chunk) => chunk)
+            .take(_maxConflictBytes + 1)
+            .toList()
+            .timeout(_handshakeTimeout);
+        if (bytes.length > _maxConflictBytes) {
+          throw const DshProtocolException('Companion device conflict response too large');
+        }
         final data = jsonDecode(utf8.decode(bytes));
         if (data case {'error': {'code': 'companion/device-request-in-use'}}) {
           owner.close();
