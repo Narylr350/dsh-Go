@@ -197,6 +197,56 @@ void main() {
     expect(order, ['approved', 'background', 'yieldCompanionAssistant', 'main', 'main']);
   });
 
+  test('failed foreground handoff keeps later screen reads bound to the original app', () async {
+    const app = MethodChannel('dsh/app');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var originalVisible = false;
+    var yields = 0;
+    var reads = 0;
+    messenger.setMockMethodCallHandler(app, (call) async {
+      expect(call.method, 'yieldCompanionAssistant');
+      yields++;
+      return originalVisible;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(app, null));
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      switch (call.method) {
+        case 'companionPhoneTools':
+          return [
+            {'name': 'screen', 'description': 'Read screen', 'inputSchema': <String, Object?>{}},
+          ];
+        case 'companionPhoneBegin':
+          return {'decision': 'allowed-once'};
+        case 'companionPhoneCall':
+          reads++;
+          return '{"result":{"content":[]}}';
+        case 'companionPhoneEnd':
+          return null;
+        default:
+          throw StateError(call.method);
+      }
+    });
+    phone = CompanionAgentPhoneTools(
+      memory: memory, source: source, turnId: turnId, isCurrent: () => current,
+      onStep: steps.add, returnToApp: true,
+    );
+    await phone.prepare();
+    Future<CompanionAgentToolResult> screen(String id) =>
+        phone.execute(CompanionAgentToolCall(id: id, name: 'phone_screen', input: const {}));
+    for (final id in ['first', 'second']) {
+      final result = await screen(id);
+      expect(result.isError, isTrue);
+      expect(jsonDecode(result.content)['code'], 'previous_app_unavailable');
+    }
+    expect(reads, 0);
+    expect(yields, 2);
+    originalVisible = true; // The owner has manually switched back.
+    expect((await screen('third')).isError, isFalse);
+    expect((await screen('fourth')).isError, isFalse);
+    expect(reads, 2);
+    expect(yields, 3);
+  });
+
   test('stop during native approval fences the late approval and close awaits one original drain', () async {
     final began = Completer<void>();
     final approval = Completer<Map<String, Object?>>();
