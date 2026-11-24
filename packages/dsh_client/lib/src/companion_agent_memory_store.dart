@@ -167,15 +167,9 @@ class _PendingRawErase {
   final int sourceRev, controlRevision;
   _RawErasePlan? plan;
   _RawEraseAnchor? anchor;
-  ({int nextSeq, int atUtcMs})? declinedAt;
+  int? firstRetrySeq;
   String state = 'deferred';
   int? expiresAtUtcMs;
-
-  void finish(String value) {
-    state = value;
-    plan = null;
-    if (value != 'expired' && value != 'declined') anchor = null;
-  }
 }
 
 List<String> _rawEraseRows(Iterable<MemoryRow> rows) => rows.map(_canonicalJson).toList()..sort();
@@ -195,6 +189,15 @@ String _entrySignature(_AgentEntryWrite write) => _canonicalJson({
 });
 
 extension CompanionAgentMemoryStore on CompanionMemoryStore {
+  void _finishRawErase(_PendingRawErase pending, String state) {
+    // Once expiry has actually been observed, subsequent admissions have an
+    // ordering independent of the device clock. Repeated reads keep the cutoff.
+    if (state == 'expired') pending.firstRetrySeq ??= archive['next_seq'] as int;
+    pending.state = state;
+    pending.plan = null;
+    if (state != 'expired' && state != 'declined') pending.anchor = null;
+  }
+
   /// This is a projection, not an offer or permission to erase. In particular,
   /// reading it during build never starts a deadline or notifies an observer.
   CompanionPendingRawErase? pendingRawErase({required String? characterId}) {
@@ -203,7 +206,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
     if (pending.characterId != characterId) pending.anchor = null;
     final state = _rawEraseState(pending, characterId);
     if (state != 'deferred' && state != 'awaiting') {
-      pending.finish(state);
+      _finishRawErase(pending, state);
       return null;
     }
     final messages = [...pending.plan!.raw.rawMessages]
@@ -224,7 +227,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
       pending.state = 'awaiting';
       pending.expiresAtUtcMs = _checkedNow() + const Duration(minutes: 5).inMilliseconds;
     } else if (state != 'awaiting') {
-      pending.finish(state);
+      _finishRawErase(pending, state);
     }
     return CompanionRawEraseResult(id: id, state: pending.state);
   }
@@ -232,27 +235,26 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
   CompanionRawEraseResult declineRawErase(String id, {required String? characterId}) {
     final pending = _pendingRawErase;
     if (pending == null || pending.id != id) return CompanionRawEraseResult(id: id, state: 'not_found');
-    final decision = _transaction<({String state, ({int nextSeq, int atUtcMs})? fence})>(() {
-      final at = _checkedNow();
-      final state = _rawEraseState(pending, characterId, nowUtcMs: at);
+    final decision = _transaction<({String state, int? firstRetrySeq})>(() {
+      final state = _rawEraseState(pending, characterId);
       if (state == 'deferred' || state == 'awaiting') {
-        return (state: 'declined', fence: (nextSeq: archive['next_seq'] as int, atUtcMs: at));
+        return (state: 'declined', firstRetrySeq: archive['next_seq'] as int);
       }
-      return (state: state, fence: null);
+      return (state: state, firstRetrySeq: null);
     });
     // Do not move a previous refusal or turn a late click into a new deadline.
-    if (decision.fence != null) pending.declinedAt = decision.fence;
-    pending.finish(decision.state);
+    pending.firstRetrySeq ??= decision.firstRetrySeq;
+    _finishRawErase(pending, decision.state);
     return CompanionRawEraseResult(id: id, state: pending.state);
   }
 
   bool invalidateRawErase() {
     final pending = _pendingRawErase;
     if (pending == null) return false;
-    if (pending.state == 'awaiting' && _checkedNow() >= pending.expiresAtUtcMs!) pending.finish('expired');
+    if (pending.state == 'awaiting' && _checkedNow() >= pending.expiresAtUtcMs!) _finishRawErase(pending, 'expired');
     pending.anchor = null;
     if (pending.state != 'deferred' && pending.state != 'awaiting') return false;
-    pending.finish('invalidated');
+    _finishRawErase(pending, 'invalidated');
     return true;
   }
 
@@ -317,14 +319,14 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
       return CompanionRawEraseResult(id: id, state: 'confirmed', changedCardIds: plan.changed);
     });
     // An exception, including COMMIT failure, leaves the live plan unconsumed.
-    if (result.state != 'deferred' && result.state != 'awaiting') pending.finish(result.state);
+    if (result.state != 'deferred' && result.state != 'awaiting') _finishRawErase(pending, result.state);
     return result;
   }
 
-  String _rawEraseState(_PendingRawErase pending, String? characterId, {int? nowUtcMs}) {
+  String _rawEraseState(_PendingRawErase pending, String? characterId) {
     if (pending.state != 'deferred' && pending.state != 'awaiting') return pending.state;
     if (pending.characterId != characterId) return 'invalidated';
-    if (pending.expiresAtUtcMs != null && (nowUtcMs ?? _checkedNow()) >= pending.expiresAtUtcMs!) return 'expired';
+    if (pending.expiresAtUtcMs != null && _checkedNow() >= pending.expiresAtUtcMs!) return 'expired';
     if (!_rawEraseCurrent(pending, characterId)) return 'invalidated';
     return pending.state;
   }
@@ -362,16 +364,16 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
     // first_seq identifies the original admission event. A later edit and the
     // caller-supplied said_at_utc must never make an earlier submission fresh.
     final firstSeq = source['first_seq'] as int;
-    final originalEvent = _db.select(
-      'SELECT queued_at_ms FROM memory_events WHERE seq=? AND message_id=? AND source_rev=1',
-      [firstSeq, source['id']],
-    );
-    final cutoff = pending.declinedAt;
-    final afterUtcMs = cutoff?.atUtcMs ?? pending.expiresAtUtcMs;
-    if (afterUtcMs == null || originalEvent.isEmpty ||
-        (originalEvent.single['queued_at_ms'] as int) < afterUtcMs ||
-        (cutoff != null && firstSeq < cutoff.nextSeq)) {
-      throw const _AgentMemoryRejected('raw_retry_needs_new_request');
+    final cutoff = pending.firstRetrySeq;
+    if (cutoff == null || firstSeq < cutoff) {
+      // A new request may have arrived after natural expiry but before anyone
+      // observed it. Only in that case use the original Store admission time.
+      if (pending.state == 'declined' || _db.select(
+        'SELECT 1 FROM memory_events WHERE seq=? AND message_id=? AND source_rev=1 AND queued_at_ms>=?',
+        [firstSeq, source['id'], pending.expiresAtUtcMs],
+      ).isEmpty) {
+        throw const _AgentMemoryRejected('raw_retry_needs_new_request');
+      }
     }
     final prior = _db.select('SELECT first_seq FROM memory_messages WHERE id=?', [pending.messageId]).single;
     if (turn['id'] == pending.turnId || source['id'] == pending.messageId ||
@@ -507,7 +509,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
         state = 'pending';
         pendingId = pending.id;
       } else {
-        pending.finish(actual);
+        _finishRawErase(pending, actual);
         state = actual;
       }
     }

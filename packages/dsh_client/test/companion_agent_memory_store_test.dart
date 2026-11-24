@@ -1534,6 +1534,8 @@ void main() {
     expect(call(wrongRole, 'related', 'related', retryRead).applied, isFalse);
     store.closeAgentTurn(wrongRole);
     store.closeAgentTurn(expiringTurn);
+    // The store has already observed expiry before the clock is corrected.
+    now -= const Duration(minutes: 10).inMilliseconds;
     final newSource = say('new-expiry-request', '请再确认一次，删掉海盐饼干的原话。');
     final newTurn = begin(newSource);
     final stableControl = store.archive['control_revision'];
@@ -1745,6 +1747,8 @@ void main() {
     expect(_captured(store, keptRaw), keptRaw);
     expect(call(declining, 'decliner-cannot-reoffer', 'related', {'rawEraseRetry': true}).applied, isFalse);
     store.closeAgentTurn(declining);
+    // A wall-clock correction cannot precede the owner's earlier decline in the journal.
+    now -= const Duration(minutes: 10).inMilliseconds;
     final second = begin(say('declined-again', '重新确认原来那句标本的话。'));
     final beforeDecision = begin(alreadySubmitted);
     expect(call(beforeDecision, 'late-after-click', 'related', {'rawEraseRetry': true}).code,
