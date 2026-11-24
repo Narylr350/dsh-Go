@@ -48,15 +48,24 @@ extension CompanionMemoryScopeStore on CompanionMemoryStore {
   }) {
     _checkMemoryCharacter(characterId);
     final at = _checkedNow();
-    final domain = _memoryDomainCards(characterId, includeEvidence: false);
-    _loadRetrievalEvidence(domain);
-    final explicit = {...explicitTopicIds, if (input != null) ...explicitMemoryTopics(input, domain)};
+    List<MemoryRow>? wholeDomain;
+    // A direct invitation is resolved against every topic, even when the
+    // matching card itself cannot be shown. Other inputs never iterate this.
+    Iterable<MemoryRow> invitationDomain() sync* {
+      final cards = _memoryDomainCards(characterId, includeEvidence: false);
+      wholeDomain = cards;
+      yield* cards;
+    }
+    final explicit = {...explicitTopicIds, if (input != null) ...explicitMemoryTopics(input, invitationDomain())};
+    final domain = wholeDomain ?? _memoryDomainCards(
+      characterId, where: includeNotices ? '' : "AND c.collection!='recent'", includeEvidence: false,
+    );
     final candidates = [
       for (final card in domain)
-        if (card['layer'] == 'card' &&
-            (includeNotices || card['collection'] != 'recent') &&
-            isMemoryContextEligible(card, nowMs: at, explicitTopicIds: explicit)) card,
+        if (card['layer'] == 'card' && (includeNotices || card['collection'] != 'recent')) card,
     ];
+    _loadRetrievalEvidence(candidates);
+    candidates.removeWhere((card) => !isMemoryContextEligible(card, nowMs: at, explicitTopicIds: explicit));
     if (candidates.isEmpty) return candidates;
     final stale = _staleReferenceRoots([for (final card in candidates) card['id'] as String]);
     return candidates..removeWhere((card) => stale.contains(card['id']));

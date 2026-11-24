@@ -57,6 +57,40 @@ void main() {
     directory.deleteSync(recursive: true);
   });
 
+  test('a turn excluding notices skips their source reads but resolves invitations against every topic', () {
+    const cardId = '60000000-0000-4000-8000-000000000001';
+    store.saveManual(
+      const CompanionMemory(id: cardId, text: '蓝桔的纪念日。', keywords: ['蓝桔']),
+      expectedRowRev: null, currentValueChange: true, realityKnown: true,
+    );
+    final topic = store.cards().single['topic_id']! as String;
+    store.applyControl(topicIds: [topic], kind: 'never');
+    List<String> host(String input) => [
+      for (final card in store.memoryRetrievalCandidates(characterId: null, input: input, includeNotices: false))
+        card['id']! as String,
+    ];
+    expect(host('聊聊蓝桔'), [cardId]);
+    for (var i = 0; i < 12; i++) {
+      remember(i + 1, text: i == 0 ? '蓝桔' : '日历测试第$i项');
+    }
+    var sourceReads = 0;
+    db.trace = SqliteTraceCallback((event) {
+      if (event is SqliteTraceStatement && (event.sql ?? '').contains('FROM memory_notice_sources')) sourceReads++;
+      return 0;
+    }, row: false, profile: false);
+    try {
+      expect(host('下午好。'), isEmpty);
+    } finally {
+      db.trace = null;
+    }
+    expect(sourceReads, lessThanOrEqualTo(1));
+    // Two distinct topics match. Removing the competing notice restores the invitation.
+    expect(host('聊聊蓝桔'), isEmpty);
+    expect(store.memoryRetrievalCandidates(characterId: null).where((card) => card['source'] != null), hasLength(12));
+    store.dismissNotice(_identity(1));
+    expect(host('聊聊蓝桔'), [cardId]);
+  });
+
   test('a notice keeps its app and observed time without creating a chat message or user proof', () {
     final at = now - hour;
     final card = remember(1, at: at)!;
