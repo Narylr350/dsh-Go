@@ -2040,8 +2040,8 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     final ok = await _confirm(l10n.companionRosterRemove, l10n.companionRosterRemoveConfirm(name));
     if (!ok || !mounted) return;
     try {
-      await _store?.removeShelved(entry.key);
-      unawaited(companionForgetIdentity(ref, entry.key));
+      final removed = await _store?.removeShelved(entry.key);
+      if (removed == true && mounted) unawaited(companionForgetIdentity(ref, entry.key));
     } on Object {
       if (mounted) _notice(l10n.companionPackStorage);
     }
@@ -2080,7 +2080,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       case 'bring':
         await _switchTo(entry);
       case 'remove' when entry.active:
-        await _removePack();
+        await _removePack(expectedKey: entry.key);
       case 'remove':
         await _removeShelved(entry);
     }
@@ -3538,36 +3538,43 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _say(_firstHello(l10n));
   }
 
-  Future<void> _removePack() async {
+  Future<void> _removePack({String? expectedKey}) async {
+    final store = _store;
+    if (store == null) return;
+    final target = (key: expectedKey ?? _characterSourceKey, revision: store.activeRevision);
     final l10n = context.l10n;
     final ok = await _confirm(
       l10n.companionMenuRemovePack,
       _bundledHere ? l10n.companionMenuRemoveConfirmBundled : l10n.companionMenuRemoveConfirm,
     );
     if (!ok || !mounted) return;
-    // Removed on purpose: the pack inside the app doesn't come back by itself.
-    unawaited(SharedPreferences.getInstance().then((p) => p.setBool(_packRemovedKey, true)));
+    String? error;
+    try {
+      final removed = await store.remove(expectedCharacter: target);
+      if (!removed) {
+        if (mounted) await _loadRoster();
+        return;
+      }
+      // Only a completed removal suppresses automatic bundled reinstallation.
+      unawaited(SharedPreferences.getInstance().then((p) => p.setBool(_packRemovedKey, true)));
+      if (!mounted) return;
+      if (target.key case final key?) unawaited(companionForgetIdentity(ref, key));
+    } on CompanionPackException catch (problem) {
+      error = _problemText(problem.problem);
+    } on Object {
+      error = l10n.companionPackStorage;
+    }
+    if (!mounted || !_attachment.isAttached || _characterSourceKey != target.key) return;
     setState(() {
       _phase = _Phase.setup;
       _stageReady = false;
       _adaptOffer = null;
       _probe = null;
+      _installError = error;
+      if (error == null) _setCharacter(const CompanionCharacter(), null);
     });
     _syncSignals();
-    try {
-      await _store?.remove();
-      if (!mounted || !_attachment.isAttached) return;
-      // What the person called her and wrote for her goes with her.
-      if (_characterSourceKey case final key?) unawaited(companionForgetIdentity(ref, key));
-      setState(() => _setCharacter(const CompanionCharacter(), null));
-      _attachment.updateCharacter(_character, _moves, sourceKey: _characterSourceKey);
-    } on CompanionPackException catch (error) {
-      // Something still reads her files (a floating window that wouldn't let
-      // go): they stay, and the setup screen says so.
-      if (mounted) setState(() => _installError = _problemText(error.problem));
-    } on Object {
-      if (mounted) setState(() => _installError = context.l10n.companionPackStorage);
-    }
+    if (error == null) _attachment.updateCharacter(_character, _moves, sourceKey: _characterSourceKey);
   }
 
   // ── Build ────────────────────────────────────────────────────────────────

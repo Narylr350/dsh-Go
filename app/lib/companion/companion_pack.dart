@@ -406,16 +406,17 @@ class CompanionPackStore {
   );
 
   /// Deletes the shelved character with [key]; the active one stays as is.
-  Future<void> removeShelved(String key) => _exclusive(
-    () => _change(stopReaders: false, () async {
-      final shelved = _shelved(key);
-      if (!await shelved.exists()) return;
+  Future<bool> removeShelved(String key) => _exclusive(() async {
+    final shelved = _shelved(key);
+    if (!await shelved.exists()) return false;
+    await _change(stopReaders: false, () async {
       final trash = Directory('${root.path}/pack.trash');
       if (await trash.exists()) await trash.delete(recursive: true);
       await shelved.rename(trash.path);
       await _forget(trash);
-    }),
-  );
+    });
+    return true;
+  });
 
   /// Exports model data only. User preferences are never read. Names/persona
   /// must be supplied explicitly for this export; otherwise a neutral name
@@ -509,20 +510,29 @@ class CompanionPackStore {
     }),
   );
 
-  Future<void> remove({WorkshopReceipt? expectedWorkshop}) => _exclusive(
-    () => _change(() async {
-      if (expectedWorkshop != null) await workshopCheckRemoval(pack, expectedWorkshop);
-      final trash = Directory('${root.path}/pack.trash');
-      if (await trash.exists()) await trash.delete(recursive: true);
-      // A leftover backup or swap note must never resurrect an intentional
-      // removal. The shelf stays; nothing is activated in her place.
-      final previous = Directory('${root.path}/pack.previous');
-      if (await previous.exists()) await previous.delete(recursive: true);
-      await _clearFallback(root.path);
-      if (await pack.exists()) await pack.rename(trash.path);
-      await _forget(trash);
-    }),
-  );
+  Future<bool> remove({WorkshopReceipt? expectedWorkshop, ({String? key, int revision})? expectedCharacter}) =>
+      _exclusive(() async {
+        if (expectedCharacter != null) {
+          final key = expectedCharacter.key;
+          // A named character may leave and return while the dialog is open.
+          // For a pack without an identity, only its original lifetime is known.
+          if (key == null && activeRevision != expectedCharacter.revision) return false;
+          if (await _characterKeyOf(pack, assign: false) != key) return false;
+        }
+        await _change(() async {
+          if (expectedWorkshop != null) await workshopCheckRemoval(pack, expectedWorkshop);
+          final trash = Directory('${root.path}/pack.trash');
+          if (await trash.exists()) await trash.delete(recursive: true);
+          // A leftover backup or swap note must never resurrect an intentional
+          // removal. The shelf stays; nothing is activated in her place.
+          final previous = Directory('${root.path}/pack.previous');
+          if (await previous.exists()) await previous.delete(recursive: true);
+          await _clearFallback(root.path);
+          if (await pack.exists()) await pack.rename(trash.path);
+          await _forget(trash);
+        });
+        return true;
+      });
 }
 
 class _CompanionRootState {

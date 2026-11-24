@@ -47,9 +47,13 @@ String get _runtime => runtimeDigest({
     if (e.key.startsWith('runtime/')) e.key: sha256.convert(e.value).toString(),
 });
 
-Uint8List _zip() {
+Uint8List _zip({String? name}) {
   final archive = Archive();
-  _files.forEach((name, data) => archive.add(ArchiveFile.bytes(name, data)));
+  final files = {
+    ..._files,
+    if (name != null) 'character/character.json': utf8.encode(jsonEncode({'name': name})),
+  };
+  files.forEach((path, data) => archive.add(ArchiveFile.bytes(path, data)));
   return Uint8List.fromList(ZipEncoder().encode(archive));
 }
 
@@ -265,6 +269,48 @@ void main() {
     expect(find.byType(WorkshopScreen), findsNothing);
     expect(find.text('她没能出来'), findsNothing);
     expect(stages, greaterThan(before));
+    await close(tester);
+  });
+
+  testWidgets("a pending removal for Ann leaves Bea's pack and the installation preference intact", (tester) async {
+    final bea = (await tester.runAsync(() async {
+      final annZip = File('${root.path}/ann.zip')..writeAsBytesSync(_zip(name: 'Ann'));
+      final beaZip = File('${root.path}/bea.zip')..writeAsBytesSync(_zip(name: 'Bea'));
+      await store.install(annZip.path);
+      final ann = (await store.characterKey())!;
+      await store.install(beaZip.path);
+      final bea = (await store.characterKey())!;
+      await store.activate(ann);
+      return bea;
+    }))!;
+    CompanionStageEvents? stageEvents;
+    await open(tester, stageBuilder: (_, events) {
+      stageEvents = events;
+      return const SizedBox.expand();
+    });
+    await settle(tester, until: () => stageEvents != null);
+    stageEvents!.onReady();
+    await settle(tester, rounds: 6);
+    await tester.pump(const Duration(seconds: 8));
+
+    await tester.tap(find.byIcon(AppIcons.more));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('移除素材'));
+    await tester.tap(find.text('移除素材'));
+    await tester.pumpAndSettle();
+    final confirm = find.widgetWithText(FilledButton, '移除素材');
+    expect(confirm, findsOneWidget);
+    final secondWindow = CompanionPackStore(store.root, expectedRuntime: _runtime);
+    await tester.runAsync(() => secondWindow.activate(bea));
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+    // characterKey joins the store queue; roster alone is a nonblocking snapshot.
+    expect(await tester.runAsync(() => store.characterKey()), bea);
+    final roster = (await tester.runAsync(() => store.roster()))!;
+    expect([for (final row in roster) (row.character.name, row.active)], [('Bea', true), ('Ann', false)]);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('companion_pack_removed'), isNot(true));
+    expect(tester.takeException(), isNull);
     await close(tester);
   });
 

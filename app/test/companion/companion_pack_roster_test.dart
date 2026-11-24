@@ -293,6 +293,55 @@ void main() {
     expect(await store.characterKey(), cat);
   });
 
+  test('a delayed active removal matches the displayed character even across A to B to A', () async {
+    final ann = await add('Ann');
+    final bea = await add('Bea');
+    await store.activate(ann);
+    final target = (key: ann, revision: store.activeRevision);
+    final otherWindow = restarted();
+    await otherWindow.activate(bea);
+    final revisionB = store.activeRevision;
+    expect(await store.remove(expectedCharacter: target), isFalse);
+    expect(store.activeRevision, revisionB);
+    expect(await names(), [('Bea', true), ('Ann', false)]);
+    await otherWindow.activate(ann);
+    expect(await store.remove(expectedCharacter: target), isTrue);
+    expect(await names(), [('Bea', false)]);
+  });
+
+  test('a queued removal checks its role after the other window finishes activating', () async {
+    final ann = await add('Ann');
+    final bea = await add('Bea');
+    await store.activate(ann);
+    final target = (key: ann, revision: store.activeRevision);
+    final entered = Completer<void>(), release = Completer<void>();
+    final unhook = store.beforeChanges(() async {
+      entered.complete();
+      await release.future;
+    });
+    final switching = restarted().activate(bea);
+    await entered.future;
+    final removal = store.remove(expectedCharacter: target);
+    unhook();
+    release.complete();
+    await switching;
+    expect(await removal, isFalse);
+    expect(await names(), [('Bea', true), ('Ann', false)]);
+    expect(await store.remove(expectedCharacter: (key: null, revision: store.activeRevision)), isFalse);
+    expect((await store.character()).name, 'Bea');
+  });
+
+  test('a shelf removal reports when its chosen character has become active', () async {
+    final ann = await add('Ann');
+    final bea = await add('Bea');
+    await restarted().activate(ann);
+    expect(await store.removeShelved(ann), isFalse);
+    expect(await names(), [('Ann', true), ('Bea', false)]);
+    await restarted().activate(bea);
+    expect(await store.removeShelved(ann), isTrue);
+    expect(await names(), [('Bea', true)]);
+  });
+
   test('remove() takes the active one only and activates nobody in her place', () async {
     final ann = await add('Ann');
     await add('Bea');
