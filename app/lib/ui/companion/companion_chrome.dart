@@ -104,14 +104,31 @@ class CompanionRoundButton extends StatelessWidget {
 }
 
 /// Her name and what she's doing: the page's one quiet line of text.
-class CompanionNamePlate extends StatelessWidget {
+class CompanionNamePlate extends StatefulWidget {
   const CompanionNamePlate({super.key, required this.name, required this.activity});
 
   final String name;
   final CompanionActivity activity;
 
   @override
+  State<CompanionNamePlate> createState() => _CompanionNamePlateState();
+}
+
+class _CompanionNamePlateState extends State<CompanionNamePlate> {
+  // Each change gets its own key: going back to a status still fading out
+  // would otherwise put two children with one key in the switcher.
+  int _changes = 0;
+
+  @override
+  void didUpdateWidget(CompanionNamePlate old) {
+    super.didUpdateWidget(old);
+    if (old.activity != widget.activity) _changes++;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final name = widget.name;
+    final activity = widget.activity;
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final colors = DshColors.of(context);
@@ -169,7 +186,7 @@ class CompanionNamePlate extends StatelessWidget {
                     duration: AppMotion.of(context, AppMotion.standard),
                     child: Text(
                       status,
-                      key: ValueKey(activity),
+                      key: ValueKey(_changes),
                       maxLines: 1,
                       style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary),
                     ),
