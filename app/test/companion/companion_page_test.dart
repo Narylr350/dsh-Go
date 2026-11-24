@@ -7165,8 +7165,9 @@ void main() {
           }
 
           events.onProbe!(bareProbe);
-          await _until2(tester, () => find.text('适配').evaluate().isNotEmpty);
-          await tester.tap(find.text('适配'));
+          final acceptFit = find.text('适配').hitTestable();
+          await _until2(tester, () => acceptFit.evaluate().isNotEmpty);
+          await tester.tap(acceptFit);
           await _until2(tester, () => responses.length == 1);
           await switchTo('Bea');
           events.onProbe!(CompanionProbe.fromJson(bareProbeJson)!);
