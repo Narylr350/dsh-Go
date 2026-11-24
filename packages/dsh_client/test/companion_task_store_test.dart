@@ -247,6 +247,72 @@ void main() {
         ],
     };
 
+    test('the drawer still sees the next reminder after cancelling one beyond a page of newer tasks', () {
+      say('older');
+      final older = create('older', reminder: _eightThirty)['task_id']! as String;
+      addNewerMaps();
+      now++;
+      say('recent');
+      final recent = create('recent')['task_id']! as String;
+      expect(store.nextReminderDueAfter(now), _eight.epochMs);
+      say('cancel-recent');
+      cancel(recent, 'cancel-recent');
+      expect(store.nextReminderDueAfter(now), _eightThirty.epochMs);
+      reopen();
+      expect(store.nextReminderDueAfter(now), _eightThirty.epochMs);
+      expect(store.nextReminderDueAfter(_eightThirty.epochMs!), isNull);
+      say('cancel-older');
+      cancel(older, 'cancel-older');
+      expect(store.nextReminderDueAfter(now), isNull);
+    });
+
+    test('the drawer respects current revisions, equal times, cancellation and the exact due boundary', () {
+      say('first');
+      final first = create('first')['task_id']! as String;
+      say('second');
+      final second = create('second')['task_id']! as String;
+      say('move-first');
+      amend(first, 'move-first');
+      expect(store.nextReminderDueAfter(now), _eight.epochMs);
+      // Only the current revision counts. Moving the second reminder creates a tie.
+      say('move-second');
+      amend(second, 'move-second');
+      expect(store.nextReminderDueAfter(now), _eightThirty.epochMs);
+      say('cancel-first');
+      cancel(first, 'cancel-first', revision: 2);
+      expect(store.nextReminderDueAfter(now), _eightThirty.epochMs);
+      expect(store.nextReminderDueAfter(_eightThirty.epochMs! - 1), _eightThirty.epochMs);
+      expect(store.nextReminderDueAfter(_eightThirty.epochMs!), isNull);
+      expect(store.nextReminderDueAfter(_eightThirty.epochMs! + 1), isNull);
+    });
+
+    test('the drawer keeps set alarms visible and excludes every ineligible persisted state', () {
+      say('source');
+      final task = create('source')['task_id']! as String;
+      for (final state in ['queued', 'waiting', 'running', 'unknown', 'done', 'partial', 'failed', 'cancelled']) {
+        for (final requested in [0, 1]) {
+          database.execute(
+            'UPDATE companion_task_revisions SET state=?, cancel_requested=? WHERE task_id=? AND task_rev=1',
+            [state, requested, task],
+          );
+          final visible = requested == 0 && const {'queued', 'waiting', 'done'}.contains(state);
+          expect(store.nextReminderDueAfter(now), visible ? _eight.epochMs : null, reason: '$state/$requested');
+        }
+      }
+    });
+
+    test('the drawer skips a missing or non-integer persisted instant', () {
+      say('source');
+      final task = create('source')['task_id']! as String;
+      for (final instant in [null, 1793664000000.5, 'unknown']) {
+        database.execute(
+          'UPDATE companion_task_revisions SET epoch_ms=?, offset_seconds=? WHERE task_id=? AND task_rev=1',
+          [instant, instant == null ? null : 28800, task],
+        );
+        expect(store.nextReminderDueAfter(now), isNull, reason: '$instant');
+      }
+    });
+
     test('finds a unique reminder outside the latest 100 tasks without writes', () {
       say('original');
       final original = create('original');

@@ -292,6 +292,17 @@ extension CompanionTaskStore on CompanionMemoryStore {
     return [for (final row in rows) Map<String, Object?>.from(row)];
   }
 
+  /// Earliest future reminder shown in the drawer, across the full task history.
+  int? nextReminderDueAfter(int utcMs) => _db.select(
+    '''
+    SELECT MIN(r.epoch_ms) AS due FROM companion_tasks t JOIN companion_task_revisions r
+      ON r.task_id=t.task_id AND r.task_rev=t.current_rev
+    WHERE t.kind='phone.reminder' AND typeof(r.epoch_ms)='integer' AND r.epoch_ms>? AND r.cancel_requested=0
+      AND r.state IN ('queued','waiting','done')
+    ''',
+    [utcMs],
+  ).single['due'] as int?;
+
   /// Two matching current reminders are enough to establish ambiguity.
   List<MemoryRow> reminderTargets({required String sourceSessionId, String? text}) {
     final rows = _db.select(

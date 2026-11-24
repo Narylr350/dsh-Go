@@ -30,14 +30,7 @@ final companionNextReminderProvider = FutureProvider.autoDispose<int?>((ref) asy
   memory.addListener(ref.invalidateSelf);
   ref.onDispose(() => memory.removeListener(ref.invalidateSelf));
   final now = DateTime.now().millisecondsSinceEpoch;
-  int? next;
-  for (final task in memory.store.tasks(limit: 100)) {
-    final due = task['epoch_ms'];
-    if (task['kind'] != 'phone.reminder' || due is! int || due <= now) continue;
-    // Set on the phone ('done') counts as much as still on its way there.
-    if (!const {'queued', 'waiting', 'done'}.contains(task['state']) || task['cancel_requested'] == 1) continue;
-    if (next == null || due < next) next = due;
-  }
+  final next = memory.store.nextReminderDueAfter(now);
   // Due passes by itself: look again then.
   if (next != null) {
     final timer = Timer(Duration(milliseconds: next - now + 1000), ref.invalidateSelf);
