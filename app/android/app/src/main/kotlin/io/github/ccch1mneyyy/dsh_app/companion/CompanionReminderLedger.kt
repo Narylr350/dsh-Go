@@ -81,6 +81,21 @@ internal class CompanionReminderLedger(private val database: SQLiteDatabase) : C
             buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
         }
 
+    // Without a committed registration claim there was no handoff to AlarmManager.
+    // This is a separate scan so old unattempted reminders do not delay live alarms.
+    fun missedRecoveryBatch(executorId: String, now: Long, afterTaskId: String, limit: Int): List<String> =
+        database.rawQuery("""
+            SELECT t.task_id FROM companion_tasks t CROSS JOIN companion_task_revisions r
+            WHERE t.task_id>? AND t.kind='phone.reminder' AND r.task_id=t.task_id AND r.task_rev=t.current_rev
+              AND r.executor_id=? AND r.operation!='cancel' AND r.cancel_requested=0
+              AND r.epoch_ms<=? AND r.state IN ('queued','running') AND r.notification_claim_id IS NULL
+              AND NOT EXISTS(SELECT 1 FROM companion_task_receipts c WHERE c.task_id=t.task_id
+                AND c.task_rev=r.task_rev AND c.step_key='alarm.register' AND c.event_kind='claimed')
+            ORDER BY t.task_id LIMIT ?
+        """.trimIndent(), arrayOf(afterTaskId, executorId, now.toString(), limit.toString())).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+
     fun oldSchedules(key: ReminderKey, limit: Int): List<ReminderKey> = database.rawQuery("""
         SELECT DISTINCT old.task_rev FROM companion_task_receipts old
         WHERE old.task_id=? AND old.task_rev<? AND old.step_key='alarm.register' AND old.event_kind='claimed'

@@ -248,6 +248,34 @@ class CompanionReminderLedgerTest : AndroidTestCase() {
         assertNull(f.ledger.current("t")!!.waitReason)
     }
 
+    fun testColdRecoverySettlesOnlyUnregisteredExpiredRemindersWithoutAnAlarm() {
+        f.revision(1)
+        f.reopen()
+        f.now = DUE
+        assertEquals(listOf("t"), f.ledger.missedRecoveryBatch(EXECUTOR, f.now, "", 1))
+        assertEquals(emptyList<String>(), f.ledger.missedRecoveryBatch("another-installation", f.now, "", 1))
+        assertEquals(emptyList<String>(), f.ledger.missedRecoveryBatch(EXECUTOR, f.now, "t", 1))
+        assertTrue(f.runner().resume("t"))
+        assertEquals("failed", f.ledger.current("t")!!.state)
+        assertEquals("time_passed", f.ledger.current("t")!!.waitReason)
+        assertTrue(f.ledger.missedRecoveryBatch(EXECUTOR, f.now, "", 1).isEmpty())
+        assertTrue(f.effects.registered.isEmpty())
+        assertTrue(f.effects.notified.isEmpty())
+    }
+
+    fun testMissedRecoveryDoesNotReclassifyAnUncertainOrCompletedRegistration() {
+        f.revision(1)
+        val key = ReminderKey("t", 1)
+        assertTrue(f.ledger.claimEffect(key, "alarm.register", "possible", key.uri("alarm").toString(), EXECUTOR, f.now))
+        f.now = DUE + 1
+        assertTrue(f.ledger.missedRecoveryBatch(EXECUTOR, f.now, "", 1).isEmpty())
+        assertEquals("unknown", f.ledger.current("t")!!.state)
+        f.ledger.effectResult(key, "alarm.register", "possible", key.uri("alarm").toString(),
+            EXECUTOR, f.now, completedState = "done")
+        assertTrue(f.ledger.missedRecoveryBatch(EXECUTOR, f.now, "", 1).isEmpty())
+        assertEquals("done", f.ledger.current("t")!!.state)
+    }
+
     fun testLookupUpgradeKeepsReminderRecoveryAndDoesNotExecuteTheLookupTask() {
         f.revision(1)
         f.installLookupSchema()

@@ -22,12 +22,42 @@ internal object CompanionReminderWork {
     }
 }
 
+internal class CompanionReminderScan {
+    private var cursor = ""
+    private var pendingTask: String? = null
+    var done = false
+        private set
+
+    fun rewindWhenIdle(): Boolean {
+        if (pendingTask != null) return false
+        cursor = ""
+        done = false
+        return true
+    }
+
+    fun advance(other: CompanionReminderScan, next: (String) -> String?, resume: (String) -> Boolean) {
+        if (done) return
+        val task = pendingTask ?: next(cursor)
+        if (task == null) {
+            done = true
+        } else if (other.pendingTask == task || resume(task)) {
+            // A time change may move the same id into both scans. The lane
+            // already draining its revisions keeps ownership until it finishes.
+            cursor = task
+            pendingTask = null
+        } else {
+            pendingTask = task
+        }
+    }
+}
+
 /** One lifecycle recovery opportunity; no periodic timer, Flutter, network, or model. */
 class CompanionReminderJob : JobService() {
     private class Run(val parameters: JobParameters) {
         @Volatile var stopped = false
-        var cursor = ""
-        var pendingTask: String? = null
+        val live = CompanionReminderScan()
+        val missed = CompanionReminderScan()
+        var recheckMissed = false
     }
     @Volatile private var active: Run? = null
     private val main = Handler(Looper.getMainLooper())
@@ -47,15 +77,21 @@ class CompanionReminderJob : JobService() {
                 val executorId = CompanionReminderPlatform.executorId(applicationContext)
                 var exhausted = false
                 CompanionReminderLedger.open(applicationContext).use { ledger ->
-                    val task = run.pendingTask ?: ledger.recoveryBatch(
-                        executorId, System.currentTimeMillis(), run.cursor, 1,
-                    ).firstOrNull()
-                    if (task == null) exhausted = true
-                    else {
-                        val runner = CompanionReminderRunner(ledger, CompanionReminderAndroid(applicationContext), executorId)
-                        if (runner.resume(task)) { run.cursor = task; run.pendingTask = null }
-                        else run.pendingTask = task
+                    val runner = CompanionReminderRunner(ledger, CompanionReminderAndroid(applicationContext), executorId)
+                    if (!run.live.done) {
+                        run.live.advance(run.missed, { cursor ->
+                            ledger.recoveryBatch(executorId, System.currentTimeMillis(), cursor, 1).firstOrNull()
+                        }) { runner.resume(it) }
+                        // A task behind the missed cursor may have expired while live work was draining.
+                        if (run.live.done) run.recheckMissed = true
                     }
+                    if (!run.stopped) {
+                        if (run.recheckMissed && run.missed.rewindWhenIdle()) run.recheckMissed = false
+                        run.missed.advance(run.live, { cursor ->
+                            ledger.missedRecoveryBatch(executorId, System.currentTimeMillis(), cursor, 1).firstOrNull()
+                        }) { runner.resume(it) }
+                    }
+                    exhausted = run.live.done && run.missed.done
                 }
                 if (run.stopped) return@execute
                 if (exhausted) finish(run, false)
