@@ -114,6 +114,20 @@ print('不读');
       }
     });
 
+    test('a full reply keeps the period lookahead at each hard boundary', () {
+      List<String> read(String text) {
+        final chunker = SpeechChunker(first: 5, target: 5, max: 6)..add(text);
+        return chunker.take(final_: true);
+      }
+
+      expect(read('aa,bb. ccdd!'), ['aa,bb.', 'ccdd!']);
+      expect(read('aa,bb.3ccdd!'), ['aa,', 'bb.3cc', 'dd!']);
+      expect(read('aa,bb！！！ccdd'), ['aa,bb！', 'ccdd']);
+      final long = '甲' * 12000;
+      final chunker = SpeechChunker()..add(long);
+      expect(chunker.take(final_: true), List.filled(40, '甲' * 300));
+    });
+
     test('pieces with no letters or digits are dropped', () {
       final chunker = SpeechChunker(first: 1);
       chunker.add('……\n好。');

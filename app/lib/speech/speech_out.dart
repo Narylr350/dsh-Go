@@ -157,8 +157,11 @@ class SpeechChunker {
   /// The pieces ready now; with [final_], everything left.
   List<String> take({bool final_ = false}) {
     final out = <String>[];
-    var rest = _buffer.toString();
-    while (rest.isNotEmpty) {
+    final text = _buffer.toString();
+    var start = 0;
+    while (start < text.length) {
+      // A following space can make the last period or first pause a boundary.
+      final rest = text.substring(start, min(text.length, start + max + 1));
       final want = _given == 0 ? first : target;
       // The first sentence end once there is enough to say.
       int? cut = _sentenceEnd.allMatches(rest).where((m) => m.end >= want).firstOrNull?.end;
@@ -184,7 +187,7 @@ class SpeechChunker {
         cut = rest.length;
       }
       final piece = rest.substring(0, cut).trim();
-      rest = rest.substring(cut);
+      start += cut;
       if (piece.isNotEmpty && RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(piece)) {
         out.add(piece);
         _given++;
@@ -192,7 +195,7 @@ class SpeechChunker {
     }
     _buffer
       ..clear()
-      ..write(rest);
+      ..write(text.substring(start));
     return out;
   }
 }
