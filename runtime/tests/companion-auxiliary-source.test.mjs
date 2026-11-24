@@ -17,8 +17,12 @@ sourceTest('locked runtime and actual adapter serialize exactly one text-only mo
   assert.equal(f.requests[0].body.tools, undefined); assert.equal(f.requests[0].init.headers['x-deepseek-harness-session-id'], undefined);
   assert.deepEqual(f.events.map(e => e.type), ['dispatch', 'http', 'usage', 'stop', 'usage', 'complete']);
   assert.equal(f.events[0].boundary, 'fetch-invoked'); assert(Number.isSafeInteger(f.events[0].atMs));
-  assert.equal(f.events.find(e => e.event === 'message_delta').raw.extra.original, true);
-  assert.equal(chunks.find(e => e.type === 'usage').usage.inputTokens, 11);
+  assert.deepEqual(f.events.find(e => e.event === 'message_delta').raw,
+    { input_tokens: 11, output_tokens: 7, cache_read_input_tokens: 13, extra: { original: true } });
+  const usage = chunks.filter(e => e.type === 'usage').map(e => e.usage);
+  assert.deepEqual(usage.map(u => [u.inputTokens, u.outputTokens, u.cacheReadTokens]),
+    [[3, 0, 2], [11, 7, 13], [11, 7, 13]]);
+  assert.equal(usage.at(-1).totalTokens, 31);
   assert.equal(chunks.at(-1).reason.kind, 'stop');
   assert.throws(() => call.stream({ system: 'again', input: 'again' }), { code: 'INVALID_PREPARED_CALL' });
   const g = await sourceFixture(root, { image: true });
@@ -263,14 +267,15 @@ sourceTest('locked pi-ai prepareCall and streamWithSnapshot preserve the current
   assert.equal(pi.calls.length, 1); assert.equal(pi.calls[0].model.id, pi.model.id);
   assert.equal(pi.calls[0].options.maxRetries, 0); assert.equal(pi.calls[0].options.maxTokens, 111);
   assert.equal(pi.calls[0].options.sessionId, undefined); assert.equal(pi.calls[0].context.tools, undefined);
-  assert.deepEqual(pi.calls[0].context.messages, [{ role: 'user', content: 'PI_AI_ONLY_SOURCE', timestamp: 0 }]);
-  assert.equal(pi.calls[0].context.systemPrompt, 'Fixed extraction');
+  const messages = [{ role: 'system', content: 'Fixed extraction' }, { role: 'user', content: 'PI_AI_ONLY_SOURCE' }];
+  assert.deepEqual(pi.calls[0].context.messages, messages.map(message => ({ ...message, timestamp: 0 })));
+  assert.equal(pi.calls[0].context.systemPrompt, undefined);
   assert.deepEqual(chunks.find(c => c.type === 'usage').usage, { inputTokens: 4, outputTokens: 2, totalTokens: 6,
     reported: { inputTokens: 4, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } });
   assert.equal(chunks.at(-1).reason.kind, 'stop'); assert.deepEqual(pi.events.map(e => e.type), ['handoff']);
   assert.equal(call.capability.physicalDispatch, 'unknown'); assert.equal(call.capability.rawUsage, 'unavailable');
   assert.equal(pi.requests.length, 1, 'ordinary Pi text also traverses the real upstream serializer and SDK');
-  assert.equal(pi.requests[0].body.messages.find(message => message.role === 'user').content, 'PI_AI_ONLY_SOURCE');
+  assert.deepEqual(pi.requests[0].body.messages, messages);
   assert.equal(pi.requests[0].body.tools, undefined);
   assert.equal(f.requests.length, 0, 'the direct default adapter is not called');
 
