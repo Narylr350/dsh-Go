@@ -338,12 +338,14 @@ class _CompanionAgentVisit {
   int controlRevision = 0;
   CompanionMemoryOwner? memory;
   Future<CompanionMemoryOwner>? opening;
-  MemoryRow? retrySource;
+  // The composer clears its Android page chip at submit. Keep the selected
+  // page with the original source until that source's retry lifetime ends.
+  ({MemoryRow source, String? page})? retrySubmission;
   // An uncertain Host request may be repeated only on that same session under
   // the same request id. A phone fallback stays on its original phone route.
   ({String sourceId, HostRef host, String sessionId, String requestId,
     (String?, String?, String?)? model})? hostAttempt;
-  ({String sourceId, String? page})? phoneAttempt;
+  String? phoneAttemptSourceId;
   CompanionAgentMemoryTools? retryTools;
   _CompanionFullSession? fullSession;
   CompanionAgentPhoneTools? activePhoneTools;
@@ -497,8 +499,8 @@ class _CompanionAgentVisit {
     characterSourceKey = sourceKey;
     bindCharacter();
     notices?.invalidate();
-    retrySource = null;
-    phoneAttempt = null;
+    retrySubmission = null;
+    phoneAttemptSourceId = null;
     run = null;
     events = const [];
     lastSpokenAt = null;
@@ -677,12 +679,15 @@ class _CompanionAgentVisit {
     void Function(MemoryRow)? onCommitted,
   }) async {
     if (!active || !originCurrent() || raw.trim().isEmpty || (preparing && !replacePreparing)) return;
-    final noticeReply = notices?.replyContext(raw, retrySource: retrySource?['id'] as String?);
+    // A newly shared, different page makes even identical words a fresh input.
+    final stored = retrySubmission;
+    final previousSubmission = assistantPage == null || assistantPage == stored?.page ? stored : null;
+    final previous = previousSubmission?.source;
+    final noticeReply = notices?.replyContext(raw, retrySource: previous?['id'] as String?);
     notices?.invalidate(keepReply: true);
     lastUserInteractionAt = DateTime.now();
     acted();
     memory?.cancelWork();
-    final previous = retrySource;
     // Take only this visit's drained, no-tool retry before stop retires other
     // pending work. A new wrapper must capture the new submission below.
     CompanionAgentMemoryTools? inheritedRetry;
@@ -738,7 +743,7 @@ class _CompanionAgentVisit {
       }
       if (!reuse) {
         hostAttempt = null;
-        phoneAttempt = null;
+        phoneAttemptSourceId = null;
         inheritedRetry?.close();
         inheritedRetry = null;
       }
@@ -753,7 +758,7 @@ class _CompanionAgentVisit {
         }
       }
       if (!current()) return;
-      final source = retrySource = reuse
+      final source = reuse
           ? previous
           : owner.store.submitMessage(
               id: companionMemoryId(),
@@ -767,6 +772,9 @@ class _CompanionAgentVisit {
               offsetSeconds: sourceClock?.offsetSeconds,
               characterId: characterId,
             );
+      // An explicit retry keeps the original attachment, including no attachment.
+      final selectedPage = reuse ? previousSubmission?.page : assistantPage;
+      retrySubmission = (source: source, page: selectedPage);
       recordInteraction('chat', source: source);
       onCommitted?.call(source);
       if (farewell.hasMatch(raw.trim())) followupRetired = true;
@@ -911,7 +919,7 @@ class _CompanionAgentVisit {
         source: source,
         system: system,
         context: turnContext,
-        assistantPage: phoneAttempt?.sourceId == source['id'] ? phoneAttempt?.page : assistantPage,
+        assistantPage: selectedPage,
         tools: noticeReply == null
             ? [
                 ...memoryTools.bindings,
@@ -957,7 +965,7 @@ class _CompanionAgentVisit {
           // The person's new message is the go-ahead, the same words included.
           // A turn that also saved a reminder or memory keeps the closed path
           // below: a fresh source would commit that a second time.
-          retrySource = null;
+          retrySubmission = null;
           failed(_phoneRunStopped);
         } else if (submittedRun.toolDispatchStarted) {
           failed(_agentRetryClosed);
@@ -967,12 +975,12 @@ class _CompanionAgentVisit {
           memoryTools = null;
           failed(error, retry: raw);
         } else {
-          retrySource = null;
+          retrySubmission = null;
           failed(error, retry: raw);
         }
       } else if (useSession || submittedRun.text.trim().isNotEmpty || !submittedRun.toolDispatchStarted) {
-        retrySource = null;
-        phoneAttempt = null;
+        retrySubmission = null;
+        phoneAttemptSourceId = null;
       }
       queueExtraction();
     } on Object catch (error) {
@@ -1056,8 +1064,8 @@ class _CompanionAgentVisit {
     // The phone's conversation pointer is shared by every role: clearing her
     // DSH session leaves the light history (hers and the others') as it was.
     if (clearsLight) owner.store.startLightConversation();
-    retrySource = null;
-    phoneAttempt = null;
+    retrySubmission = null;
+    phoneAttemptSourceId = null;
     lastSpokenAt = null;
     lastClockAt = null;
     run = null;

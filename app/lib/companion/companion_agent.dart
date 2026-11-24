@@ -246,7 +246,7 @@ class CompanionAgent extends ChangeNotifier {
           }.contains(failure.hostFailure);
           if (run.phoneRoute || !_current(run) || retry?.sourceId == id || !eligible || !phone.agentConfigured) rethrow;
           run.phoneRoute = true;
-          visit.phoneAttempt = (sourceId: id, page: run.assistantPage);
+          visit.phoneAttemptSourceId = id;
           if (visit.runOrigin case final CompanionFallbackUi ui) ui.continuedOnPhone(id);
           await _loop(run);
         } finally {

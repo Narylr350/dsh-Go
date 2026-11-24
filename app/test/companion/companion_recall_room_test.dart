@@ -47,6 +47,7 @@ class _Bridge extends DshConnection {
   bool failRevoke = false;
   bool chatUsage = false;
   bool phoneMemory = true;
+  bool acceptsSelectedPage = true;
   final prepared = <Map<String, Object?>>[];
   final boundSessions = <String>{};
   final revokes = <Map<String, Object?>>[];
@@ -68,7 +69,7 @@ class _Bridge extends DshConnection {
     'profileAccepted': true,
     'phoneMemory': phoneMemory,
     if (phoneMemory) 'phoneMemoryVersion': 3,
-    if (phoneMemory) 'selectedPage': true,
+    if (phoneMemory && acceptsSelectedPage) 'selectedPage': true,
     'chatUsage': chatUsage,
     'memoryMode': phoneSessions.contains(session) ? 'phone' : 'query',
   };
@@ -249,8 +250,11 @@ class _Bridge extends DshConnection {
 }
 
 class _Settings extends SettingsController {
+  _Settings(this.apiKey);
+  final String apiKey;
+
   @override
-  AppSettings build() => const AppSettings(loaded: true, apiKey: 'synthetic-test-key');
+  AppSettings build() => AppSettings(loaded: true, apiKey: apiKey);
 }
 
 String _reply(String text) => [
@@ -319,7 +323,7 @@ class _Room {
     );
   });
 
-  Future<void> open(WidgetTester tester, {String? page}) async {
+  Future<void> open(WidgetTester tester, {String? page, String phoneKey = 'synthetic-test-key'}) async {
     // A valid old Host has the text route but no agent turn.
     bridge.host = (await tester.runAsync(NotesPeer.open))!;
     bridge.host!.hostModel
@@ -338,7 +342,7 @@ class _Room {
           activeHostProvider.overrideWith(_Host.new),
           activeConnectionProvider.overrideWithValue(AsyncData(HostConnection(client: client, isLocal: true))),
           sessionsProvider.overrideWith(() => sessions),
-          settingsProvider.overrideWith(_Settings.new),
+          settingsProvider.overrideWith(() => _Settings(phoneKey)),
           companionLightClientProvider.overrideWithValue(model),
         ],
         child: MaterialApp(
@@ -580,6 +584,72 @@ void main() {
       await room.say(tester, '谢谢');
       expect(room.client.prompts.last.session, room.client.prompts.first.session);
       expect(room.bridge.prepared.last['deviceContext'] as Map, isNot(contains('selectedPage')));
+      expect(room.asked, isEmpty);
+    } finally {
+      await room.close(tester);
+    }
+  });
+
+  testWidgets('an explicit selected-page retry without a phone key keeps the page until the Host supports it', (
+    tester,
+  ) async {
+    const page = '列车将在九点到站。';
+    const raw = ' 几点到站？ ';
+    final room = _Room(root)..bridge.acceptsSelectedPage = false;
+    await room.open(tester, page: page, phoneKey: '');
+    try {
+      await room.say(tester, raw);
+      final original = room.memory.store.messages().where((r) => r['role'] == 'user').single;
+      expect(original['text'], raw);
+      expect(room.client.prompts, isEmpty);
+      expect(room.bridge.prepared, isEmpty);
+      expect(room.asked, isEmpty);
+
+      await room.say(tester, raw); // The page chip was already cleared by the first submit.
+      expect(room.client.prompts, isEmpty, reason: 'a still-unsupported page cannot become a text-only prompt');
+      expect(room.bridge.prepared, isEmpty);
+      expect(room.asked, isEmpty);
+
+      room.bridge.acceptsSelectedPage = true;
+      await room.say(tester, raw);
+      expect(room.client.prompts.single.text, raw);
+      expect(room.bridge.prepared.single['deviceContext'], containsPair('selectedPage', page));
+      final user = room.memory.store.messages().where((r) => r['role'] == 'user').single;
+      expect(user['id'], original['id']);
+      expect(user['text'], raw);
+
+      await room.say(tester, '谢谢');
+      expect(room.client.prompts.map((p) => p.text), [raw, '谢谢']);
+      expect(room.bridge.prepared.last['deviceContext'] as Map, isNot(contains('selectedPage')));
+      expect(room.asked, isEmpty);
+    } finally {
+      await room.close(tester);
+    }
+  });
+
+  testWidgets('sharing a different page with the same words creates a fresh source in the open room', (tester) async {
+    const raw = '这页说什么？';
+    const firstPage = '甲页：周二。';
+    const nextPage = '乙页：周四。';
+    final room = _Room(root)..bridge.acceptsSelectedPage = false;
+    await room.open(tester, page: firstPage, phoneKey: '');
+    try {
+      await room.say(tester, raw);
+      final first = room.memory.store.messages().where((r) => r['role'] == 'user').single;
+      expect(room.client.prompts, isEmpty);
+      final here = tester.element(find.byType(CompanionPage));
+      await settleMixed(tester, openCompanionAssistant(here, here as WidgetRef, const CompanionAssistantEntry(page: nextPage)));
+      await room.settle(tester);
+      expect(find.byType(CompanionPage), findsOneWidget);
+      room.bridge.acceptsSelectedPage = true;
+      await room.say(tester, raw);
+      expect(room.client.prompts.single.text, raw);
+      expect(room.bridge.prepared.single['deviceContext'], containsPair('selectedPage', nextPage));
+      expect(jsonEncode(room.bridge.prepared), isNot(contains(firstPage)));
+      final users = room.memory.store.messages().where((r) => r['role'] == 'user');
+      expect(users.map((r) => r['text']), [raw, raw]);
+      expect(users.map((r) => r['id']).toSet(), hasLength(2));
+      expect(users.map((r) => r['id']), contains(first['id']));
       expect(room.asked, isEmpty);
     } finally {
       await room.close(tester);
