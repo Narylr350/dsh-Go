@@ -98,7 +98,7 @@ class VoiceCallController extends ChangeNotifier {
     required this.choices,
     this.permission,
     this.cutNote,
-    this.verbatimInput,
+    this.sendVerbatim,
     this.thinkingCue,
     this.confirmAfter = const Duration(milliseconds: 1600),
     this.cueAfter = const Duration(milliseconds: 1200),
@@ -116,7 +116,8 @@ class VoiceCallController extends ChangeNotifier {
 
   /// The conversation carries its call context separately from the user's
   /// utterance. Do not attribute the app hint or a cut-off reply to them.
-  final bool Function()? verbatimInput;
+  /// Returns null when this conversation uses the regular formatted message.
+  final Future<bool>? Function(String utterance, String? callNote)? sendVerbatim;
 
   /// Plays the soft "still thinking" sound.
   final Future<void> Function()? thinkingCue;
@@ -427,7 +428,10 @@ class VoiceCallController extends ChangeNotifier {
       _cueTimer = Timer(cueAfter, _cue);
       _set(CallPhase.thinking);
     }
-    final sent = await conversation.send(verbatimInput?.call() == true ? _heard : message);
+    // This sidecar expires with its request, so repeat the call's style there.
+    final notes = [?hint, ?note];
+    final sent = await (sendVerbatim?.call(_heard, notes.isEmpty ? null : notes.join('\n')) ??
+        conversation.send(message));
     if (_phase == CallPhase.ended) return;
     if (!sent) {
       _replyDone = true;

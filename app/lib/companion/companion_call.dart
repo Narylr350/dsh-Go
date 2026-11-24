@@ -15,7 +15,7 @@ class CompanionCallConversation implements CallConversation {
   final bool Function()? fullMode;
   String? get sessionId => session?.call();
 
-  final Future<bool> Function(String text) _send;
+  final Future<bool> Function(String text, String? callNote) _send;
   final Future<void> Function() _stop;
   final _replies = StreamController<CallReply>.broadcast();
   bool _tracking = false;
@@ -28,11 +28,14 @@ class CompanionCallConversation implements CallConversation {
   @override
   bool get waiting => waitingForOwner?.call() ?? false;
 
+  Future<bool>? sendVerbatim(String utterance, String? callNote) =>
+      fullMode?.call() == true ? send(utterance, callNote: callNote) : null;
+
   @override
-  Future<bool> send(String text) async {
+  Future<bool> send(String text, {String? callNote}) async {
     _tracking = true;
     _last = '';
-    final ok = await _send(text);
+    final ok = await _send(text, callNote);
     if (!ok) {
       _tracking = false;
       return false;

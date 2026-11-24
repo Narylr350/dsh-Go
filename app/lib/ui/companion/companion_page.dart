@@ -2427,7 +2427,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _focus.unfocus();
     if (_voice.active || _voice.cancelling) await _voice.cancel();
     if (!mounted) return;
-    final call = _call = CompanionCallConversation((text) async {
+    final call = _call = CompanionCallConversation((text, callNote) async {
       if (!mounted || _attachment.preparing || !_attachment.isAttached) return false;
       _callBaseline = _baselineUser;
       _retireGreeting();
@@ -2436,7 +2436,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
         _myLine = text.trim();
       });
       _stage.command('mood', {'mood': 'thinking'});
-      await _attachment.submit(text, voiceCall: true);
+      await _attachment.submit(text, voiceCall: true, callNote: callNote);
       return true;
     }, _stop,
         fullMode: () => mounted && !_light,

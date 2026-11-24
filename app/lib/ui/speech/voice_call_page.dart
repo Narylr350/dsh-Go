@@ -176,8 +176,8 @@ class _VoiceCallPageState extends ConsumerState<VoiceCallPage> with WidgetsBindi
     _call = VoiceCallController(
       audio: audio,
       conversation: widget.conversation,
-      verbatimInput: switch (widget.conversation) {
-        final CompanionCallConversation room => room.fullMode,
+      sendVerbatim: switch (widget.conversation) {
+        final CompanionCallConversation room => room.sendVerbatim,
         _ => null,
       },
       recognizer: () async {

@@ -102,11 +102,12 @@ class CompanionAgentAttachment {
 
   Future<CompanionMemoryOwner> openMemory() =>
       isAttached ? _visit.openMemory() : Future.error(const DshClosedException('Companion window closed'));
-  Future<void> submit(String raw, {String? assistantPage, bool returnToApp = false, bool voiceCall = false}) async {
+  Future<void> submit(String raw, {String? assistantPage, bool returnToApp = false, bool voiceCall = false, String? callNote}) async {
     if (isAttached) {
       await _visit.submit(
         raw,
         inputWindow: voiceCall ? 'voice' : 'room',
+        callNote: callNote,
         origin: _window.ui,
         handoff: _window.mapHandoff,
         originCurrent: () => isAttached,
@@ -340,7 +341,7 @@ class _CompanionAgentVisit {
   Future<CompanionMemoryOwner>? opening;
   // The composer clears its Android page chip at submit. Keep the selected
   // page with the original source until that source's retry lifetime ends.
-  ({MemoryRow source, String? page})? retrySubmission;
+  ({MemoryRow source, String? page, String? callNote})? retrySubmission;
   // An uncertain Host request may be repeated only on that same session under
   // the same request id. A phone fallback stays on its original phone route.
   ({String sourceId, HostRef host, String sessionId, String requestId,
@@ -675,13 +676,16 @@ class _CompanionAgentVisit {
     required bool Function() originCurrent,
     bool replacePreparing = false,
     String? assistantPage,
+    String? callNote,
     bool returnToApp = false,
     void Function(MemoryRow)? onCommitted,
   }) async {
     if (!active || !originCurrent() || raw.trim().isEmpty || (preparing && !replacePreparing)) return;
     // A newly shared, different page makes even identical words a fresh input.
     final stored = retrySubmission;
-    final previousSubmission = assistantPage == null || assistantPage == stored?.page ? stored : null;
+    final sameInput = (assistantPage == null || assistantPage == stored?.page) &&
+        (callNote == null || callNote == stored?.callNote);
+    final previousSubmission = sameInput ? stored : null;
     final previous = previousSubmission?.source;
     final noticeReply = notices?.replyContext(raw, retrySource: previous?['id'] as String?);
     notices?.invalidate(keepReply: true);
@@ -774,7 +778,8 @@ class _CompanionAgentVisit {
             );
       // An explicit retry keeps the original attachment, including no attachment.
       final selectedPage = reuse ? previousSubmission?.page : assistantPage;
-      retrySubmission = (source: source, page: selectedPage);
+      final originalCallNote = reuse ? previousSubmission?.callNote : callNote;
+      retrySubmission = (source: source, page: selectedPage, callNote: originalCallNote);
       recordInteraction('chat', source: source);
       onCommitted?.call(source);
       if (farewell.hasMatch(raw.trim())) followupRetired = true;
@@ -796,7 +801,8 @@ class _CompanionAgentVisit {
         Map.unmodifiable({
           ...sampledContext.data,
           if (noticeReply != null) 'noticeReply': noticeReply.context,
-          'window': inputWindow,
+          'window': originalCallNote == null ? inputWindow : 'voice',
+          'callNote': ?originalCallNote,
           if (sourceClock != null) 'zoneId': sourceClock.zoneId,
           // A retry's current clock is not when its unchanged words were said.
           if (reuse)

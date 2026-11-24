@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dsh_app/companion/companion_call.dart';
+
 import 'package:dsh_app/companion/companion_memory.dart';
 import 'package:dsh_app/companion/companion_pack.dart';
 import 'package:dsh_app/companion/companion_state.dart';
@@ -17,6 +19,7 @@ import 'package:dsh_app/state/settings_state.dart';
 import 'package:dsh_app/ui/chat/widgets/approval_card.dart';
 import 'package:dsh_app/ui/companion/companion_ask.dart';
 import 'package:dsh_app/ui/companion/companion_chrome.dart';
+import 'package:dsh_app/ui/speech/voice_call_page.dart';
 import 'package:dsh_app/ui/companion/companion_log.dart';
 import 'package:dsh_app/ui/companion/companion_page.dart';
 import 'package:dsh_app/ui/companion/companion_stage.dart';
@@ -47,6 +50,7 @@ class _Bridge extends DshConnection {
   bool failRevoke = false;
   bool chatUsage = false;
   bool phoneMemory = true;
+  bool callNote = true;
   bool acceptsSelectedPage = true;
   final prepared = <Map<String, Object?>>[];
   final boundSessions = <String>{};
@@ -69,6 +73,7 @@ class _Bridge extends DshConnection {
     'profileAccepted': true,
     'phoneMemory': phoneMemory,
     if (phoneMemory) 'phoneMemoryVersion': 3,
+    if (phoneMemory && callNote) 'callNote': true,
     if (phoneMemory && acceptsSelectedPage) 'selectedPage': true,
     'chatUsage': chatUsage,
     'memoryMode': phoneSessions.contains(session) ? 'phone' : 'query',
@@ -814,5 +819,31 @@ void main() {
         }
       },
     );
+  }
+
+  for (final supported in [false, true]) {
+    testWidgets('room call advertises notes only to a supporting host (supported: $supported)', (tester) async {
+      const text = '换个话题。', note = '口语回答，上一句听到“好的”。';
+      final room = _Room(root);
+      room.bridge.callNote = supported;
+      await room.open(tester);
+      try {
+        tester.widget<CompanionComposer>(find.byType(CompanionComposer)).onCall!();
+        await tester.pump();
+        final page = find.byType(VoiceCallPage);
+        final call = tester.widget<VoiceCallPage>(page).conversation as CompanionCallConversation;
+        final sent = call.sendVerbatim(text, note);
+        expect(sent, isNotNull);
+        expect(await settleMixed(tester, sent!, step: const Duration(milliseconds: 32)), isTrue);
+        expect(room.client.prompts.single.text, text);
+        final context = room.bridge.prepared.single['deviceContext'] as Map;
+        expect(context['window'], 'voice');
+        expect(context.containsKey('callNote'), supported);
+        if (supported) expect(context['callNote'], note);
+        expect(room.memory.store.messages().singleWhere((row) => row['role'] == 'user')['text'], text);
+      } finally {
+        await room.close(tester);
+      }
+    });
   }
 }

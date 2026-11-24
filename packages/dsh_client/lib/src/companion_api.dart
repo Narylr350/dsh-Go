@@ -388,6 +388,7 @@ class CompanionPromptCapability {
     this.phoneMemory = false,
     int? phoneMemoryVersion,
     this.selectedPage = false,
+    this.callNote = false,
     this.chatUsage = false,
   }) : phoneMemoryVersion = phoneMemoryVersion ?? (phoneMemory ? 2 : 0);
   final String instanceId;
@@ -413,6 +414,9 @@ class CompanionPromptCapability {
 
   /// This bridge accepts a shared page in the matching request-only sidecar.
   final bool selectedPage;
+
+  /// The bridge accepts the call’s spoken style or interruption note outside the user text.
+  final bool callNote;
 
   /// Owner-only observations for marked ordinary chat calls. This is not
   /// complete billing coverage for background, compaction, or other agents.
@@ -455,6 +459,7 @@ class CompanionPromptCapability {
       phoneMemory: map['phoneMemory'] == true,
       phoneMemoryVersion: map['phoneMemoryVersion'] as int?,
       selectedPage: map['selectedPage'] == true,
+      callNote: map['callNote'] == true,
       chatUsage: map['chatUsage'] == true,
     );
   }

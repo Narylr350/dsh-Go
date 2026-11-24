@@ -401,6 +401,7 @@ class _CompanionFullSession {
         deviceContext: cap.phoneMemoryVersion >= 3
             ? {
                 'window': ctx['window'],
+                if (cap.callNote && ctx.containsKey('callNote')) 'callNote': ctx['callNote'],
                 'localTime': ctx['localTime'],
                 if (ctx.containsKey('zoneId')) 'zoneId': ctx['zoneId'],
                 if (ctx.containsKey('originalMessage')) 'originalMessage': ctx['originalMessage'],

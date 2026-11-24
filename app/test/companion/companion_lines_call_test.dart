@@ -32,7 +32,7 @@ void main() {
   test('a tool-only call completes without words and follows the live room binding', () async {
     String? session;
     var waiting = false;
-    final call = CompanionCallConversation((_) async => true, () async {},
+    final call = CompanionCallConversation((_, _) async => true, () async {},
         session: () => session, waitingForOwner: () => waiting, fullMode: () => true);
     expect(call.sessionId, isNull);
     await call.send('检查一下');
@@ -48,7 +48,7 @@ void main() {
 
   test('a call hears each reply once and ends the turn when she stops', () async {
     final sent = <String>[];
-    final call = CompanionCallConversation((text) async {
+    final call = CompanionCallConversation((text, _) async {
       sent.add(text);
       return true;
     }, () async {});

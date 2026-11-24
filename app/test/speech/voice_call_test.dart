@@ -30,6 +30,7 @@ class _Rig {
     FakeCloud? cloud,
     FakeOut Function()? makeVoice,
     bool noRecognizer = false,
+    bool spoken = true,
     bool verbatim = false,
     CallStart start = CallStart.ok,
     bool bargeIn = true,
@@ -42,14 +43,18 @@ class _Rig {
     call = VoiceCallController(
       audio: audio,
       conversation: conversation,
-      verbatimInput: () => verbatim,
+      sendVerbatim: (text, note) {
+        if (!verbatim) return null;
+        callNotes.add(note);
+        return conversation.send(text);
+      },
       recognizer: () async => noRecognizer ? null : (pick != null ? await pick!() : (next ?? this.cloud)),
       voice: () {
         final out = makeVoice?.call() ?? FakeOut();
         outs.add(out);
         return out;
       },
-      choices: () async => (bargeIn: bargeIn, speaker: true, spokenHint: '（语音通话）', pause: pause),
+      choices: () async => (bargeIn: bargeIn, speaker: true, spokenHint: spoken ? '（语音通话）' : null, pause: pause),
       cutNote: (heard) => '（被打断在：$heard）',
       thinkingCue: () async => cues++,
       confirmAfter: confirmAfter,
@@ -66,6 +71,7 @@ class _Rig {
   /// Or, answered later: the recognizer as the provider would find it.
   Future<FakeCloud> Function()? pick;
   final conversation = FakeConversation();
+  final callNotes = <String?>[];
   final outs = <FakeOut>[];
   int cues = 0;
   late final VoiceCallController call;
@@ -273,14 +279,30 @@ void main() {
     expect(rig.conversation.sent.last, '（被打断在：好的，）\n换个话题吧');
   });
 
-  test('verbatim companion call keeps app hint and cut-off assistant words out of the human prompt', () async {
-    final rig = await speaking(verbatim: true);
-    expect(rig.conversation.sent.single, '今天天气怎么样');
-    await over(rig, '换个话题吧');
-    expect(rig.conversation.interrupts, 1);
-    expect(rig.conversation.sent, ['今天天气怎么样', '换个话题吧']);
-    rig.call.dispose();
-  });
+  for (final spoken in [false, true]) {
+    test('full call keeps its spoken setting on each request and the cut only on the next (spoken: $spoken)', () async {
+      final rig = _Rig(verbatim: true, spoken: spoken);
+      addTearDown(rig.call.dispose);
+      await rig.call.start();
+      await rig.say();
+      rig.conversation.reply('第一句说完。', done: true);
+      rig.outs.single.emit(const SpeechOutStarted());
+      rig.outs.single.emit(const SpeechOutDone());
+      rig.cloud.text = '第二个问题';
+      await rig.say();
+      rig.conversation.reply('好的，我来详细说一说。');
+      rig.outs.last.emit(const SpeechOutStarted());
+      rig.outs.last.heard = '好的，';
+      await over(rig, '换个话题吧');
+      expect(rig.conversation.interrupts, 1);
+      expect(rig.conversation.sent, ['今天天气怎么样', '第二个问题', '换个话题吧']);
+      expect(rig.callNotes, [
+        spoken ? '（语音通话）' : null,
+        spoken ? '（语音通话）' : null,
+        if (spoken) '（语音通话）\n（被打断在：好的，）' else '（被打断在：好的，）',
+      ]);
+    });
+  }
 
   test('the turns: what was said and her reply, cut where she stopped', () async {
     final rig = await speaking();
