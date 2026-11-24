@@ -499,6 +499,74 @@ void main() {
     }
   });
 
+  for (final scenario in ['FULL_HOST_TOOLS', 'FULL_DEVICE_reminder', 'FULL_DEVICE_photo', 'FULL_MCP_BUTTON', 'FULL_TWO_TURNS']) {
+    testWidgets('full room presents the stored engine replay for $scenario', (tester) async {
+      const directory = String.fromEnvironment('DSH_COMPANION_REPLAY_DIR', defaultValue: 'test/fixtures/companion_full_replays');
+      final raw = await tester.runAsync(() => File('$directory/$scenario.json').readAsString());
+      final turns = (jsonDecode(raw!) as List).cast<Map<String, dynamic>>();
+      final room = _Room(root);
+      for (final turn in turns) {
+        room.client.replayDeltas[turn['input'] as String] = (turn['parts'] as List).cast<String>();
+      }
+      final release = <Completer<void>>[];
+      final split = scenario == 'FULL_TWO_TURNS';
+      await room.open(tester);
+      try {
+        room.emotions.clear();
+        room.actions.clear();
+        for (final (i, turn) in turns.indexed) {
+          final input = turn['input'] as String;
+          final output = turn['output'] as String;
+          final visible = output.replaceFirst(RegExp(r'^\[(表情|动作):[^\]]+\]'), '');
+          final entered = [Completer<void>(), Completer<void>()];
+          final proceed = [Completer<void>(), Completer<void>()];
+          if (split) {
+            release.addAll(proceed);
+            room.client.afterReplayPart = (part) {
+              entered[part - 1].complete();
+              return proceed[part - 1].future;
+            };
+          }
+          await room.say(tester, input);
+          expect(room.client.prompts.last.text, input);
+          if (split) {
+            await settleMixed(tester, entered[0].future);
+            await room.settle(tester);
+            final captions = tester.widgetList<CompanionSpeech>(find.byType(CompanionSpeech)).map((s) => s.text);
+            expect(captions.whereType<String>().any((caption) => caption.contains((turn['parts'] as List).first as String)), isFalse);
+            final marks = i == 0 ? room.emotions : room.actions;
+            final mark = i == 0 ? 'happy' : 'nod';
+            expect(marks.where((name) => name == mark), isEmpty);
+            proceed[0].complete();
+            await settleMixed(tester, entered[1].future);
+            await room.settle(tester);
+            expect(tester.widget<CompanionSpeech>(find.byType(CompanionSpeech)).text, visible);
+            expect(marks.where((name) => name == mark), hasLength(1));
+            expect(room.memory.store.messages().where((m) => m['role'] == 'assistant'), hasLength(i));
+            proceed[1].complete();
+            await room.settle(tester);
+            expect(marks.where((name) => name == mark), hasLength(1));
+          }
+          expect(tester.widget<CompanionSpeech>(find.byType(CompanionSpeech)).text, visible);
+        }
+        expect(room.client.prompts.map((p) => p.session).toSet(), hasLength(1));
+        expect(room.client.prompts.map((p) => p.requestId).toSet(), hasLength(turns.length));
+        final saved = room.memory.store.messages().where((m) => m['role'] == 'assistant').map((m) => m['text']);
+        expect(saved, unorderedEquals(turns.map((t) => t['output'])));
+        if (scenario == 'FULL_TWO_TURNS') {
+          expect(room.emotions.where((value) => value == 'happy'), hasLength(1));
+          expect(room.actions.where((value) => value == 'nod'), hasLength(1));
+        }
+        expect(room.asked, isEmpty);
+      } finally {
+        for (final gate in release) {
+          if (!gate.isCompleted) gate.complete();
+        }
+        await room.close(tester);
+      }
+    });
+  }
+
   testWidgets('Android assistant shares the page with exactly one full room request', (tester) async {
     final room = _Room(root);
     const page = '列车将在九点到站。';

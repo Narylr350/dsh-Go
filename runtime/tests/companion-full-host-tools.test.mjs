@@ -52,7 +52,39 @@ async function mountHostTools(f) {
   await f.replaceFull([...f.fullPlugins(), ...rows]);
 }
 
-test('companion reads a file, writes and runs code, then fetches a fixture web page in one real engine turn', {
+async function createStoredAgent(f, id) {
+  const { apply } = await f.engine.load('dsh-session-persistence-jsonl');
+  await apply(f.ctx, { root: join(f.home, 'history'), compression: 'none', listConcurrency: 1 });
+  return f.createAgent(id);
+}
+
+async function storedEvents(f, agent, inputs, calls) {
+  assert.equal(await f.ctx.sessions.flush(agent.session), true);
+  const reader = await f.ctx.sessionPersistence.open(agent.id, 'read');
+  try {
+    const { events } = await reader.read();
+    assert.deepEqual(events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'user')
+      .map(e => e.data.content[0].text), inputs);
+    assert.deepEqual(events.filter(e => e.type === 'tool/call').map(e => [e.data.callId, e.data.name]), calls);
+    assert.deepEqual(events.filter(e => e.type === 'tool/result').map(e => e.data.message.toolCallId), calls.map(([id]) => id));
+    // Export the user's actual words and the stream that produced each final
+    // reply. The room replay can consume this directory without a live Host.
+    if (process.env.DSH_COMPANION_REPLAY_DIR) {
+      const turns = inputs.map((input, i) => {
+        const reply = events.filter(e => e.type === 'assistant/message' && e.data.turn === i + 1).at(-1);
+        const parts = f.engine.llm.expandAssistantStream(reply.data.stream)
+          .filter(frame => frame.chunk.type === 'text-delta').map(frame => frame.chunk.text);
+        const output = reply.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('');
+        assert.equal(parts.join(''), output);
+        return { input, parts, output };
+      });
+      await writeFile(join(process.env.DSH_COMPANION_REPLAY_DIR, agent.id + '.json'), JSON.stringify(turns, null, 2) + '\n');
+    }
+    return events;
+  } finally { await reader.close(); }
+}
+
+test('companion reads input, corrects its script from stdout, reruns it and reads a page in one real engine turn', {
   skip: !process.env.DSH_PREFIX ? 'DSH_PREFIX must name the patched runtime' : process.platform === 'win32' && 'Unix shell fixture',
   timeout: 20000, concurrency: false,
 }, async t => {
@@ -65,7 +97,7 @@ test('companion reads a file, writes and runs code, then fetches a fixture web p
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const url = new URL('/notice', 'http://127.0.0.1:' + server.address().port);
   const realFetch = globalThis.fetch, seen = [];
-  let source, script;
+  let source, script, expected;
   const f = await createFixture({ withRecall: false, transport: (request, n) => {
     const results = request.body.messages.flatMap(message => message.content).filter(block => block.type === 'tool_result');
     seen.push(results.at(-1));
@@ -74,11 +106,28 @@ test('companion reads a file, writes and runs code, then fetches a fixture web p
       case 2: {
         const match = /INPUT=(\d+)/.exec(JSON.stringify(results.at(-1)?.content));
         if (!match) return textResponse('missing input');
-        return toolResponse('write-script', 'write', { file_path: script, content: 'console.log("RESULT=" + 2 * ' + match[1] + ')\n' });
+        expected = 2 * Number(match[1]);
+        return toolResponse('write-script', 'write', { file_path: script,
+          content: 'console.log("RESULT=" + (2 * ' + match[1] + ' + 1))\n' });
       }
       case 3: return toolResponse('run-script', 'bash', { command: 'node double.mjs', description: '运行刚写的测试脚本' });
-      case 4: return toolResponse('fetch-page', 'web_fetch', { url: url.href });
-      default: return textResponse('完成测试。');
+      case 4: {
+        const actual = Number(/RESULT=(\d+)/.exec(lastTool(request, 'run-script'))?.[1]);
+        assert.equal(actual - expected, 1);
+        return toolResponse('correct-script', 'edit', { file_path: script, old_string: ' + 1)', new_string: ')' });
+      }
+      case 5:
+        lastTool(request, 'correct-script');
+        return toolResponse('rerun-script', 'bash', { command: 'node double.mjs', description: '重跑修正后的脚本' });
+      case 6:
+        assert.match(lastTool(request, 'rerun-script'), new RegExp('RESULT=' + expected + '\\b'));
+        return toolResponse('fetch-page', 'web_fetch', { url: url.href });
+      case 7: {
+        const page = /PAGE_FIXTURE_OK/.exec(lastTool(request, 'fetch-page'));
+        assert(page);
+        return textResponse('修正后的两倍是 ' + expected + '，页面返回 ' + page[0] + '。');
+      }
+      default: assert.fail('unexpected model request');
     }
   } });
   t.after(() => f.dispose());
@@ -91,19 +140,31 @@ test('companion reads a file, writes and runs code, then fetches a fixture web p
   await mountHostTools(f);
   source = join(f.home, 'input.txt'); script = join(f.home, 'double.mjs');
   await writeFile(source, 'INPUT=27\n');
-  const { agent } = await f.createAgent('FULL_HOST_TOOLS');
-  await f.send(agent, '读输入，写脚本算两倍运行，再查看页面。');
-  assert.equal(f.requests.length, 5);
+  const { agent } = await createStoredAgent(f, 'FULL_HOST_TOOLS');
+  const input = '读输入，写脚本算两倍。检查运行结果，改错后再运行，然后查看页面。';
+  await f.send(agent, input);
+  assert.equal(f.requests.length, 7);
   assert(f.requests.every(request => request.sessionId === agent.id));
   const names = f.requests[0].body.tools.map(tool => tool.name);
-  for (const tool of ['read', 'write', 'bash', 'web_fetch']) assert(names.includes(tool), tool);
+  for (const tool of ['read', 'write', 'edit', 'bash', 'web_fetch']) assert(names.includes(tool), tool);
   assert(!names.includes('workspace'));
   assert(requestSystemText(f.requests[0]).includes('查看输出后继续处理'));
-  assert.deepEqual(seen.slice(1).map(block => block.tool_use_id), ['read-input', 'write-script', 'run-script', 'fetch-page']);
+  const calls = [['read-input', 'read'], ['write-script', 'write'], ['run-script', 'bash'],
+    ['correct-script', 'edit'], ['rerun-script', 'bash'], ['fetch-page', 'web_fetch']];
+  assert.deepEqual(seen.slice(1).map(block => block.tool_use_id), calls.map(([id]) => id));
   assert(seen.slice(1).every(block => block.is_error !== true));
-  assert.match(await readFile(script, 'utf8'), /2 \* 27/);
-  assert.match(JSON.stringify(seen[3].content), /RESULT=54/);
-  assert.match(JSON.stringify(seen[4].content), /PAGE_FIXTURE_OK/);
+  assert.equal(await readFile(script, 'utf8'), 'console.log("RESULT=" + (2 * 27))\n');
+  assert.match(JSON.stringify(seen[3].content), /RESULT=55/);
+  assert.match(JSON.stringify(seen[5].content), /RESULT=54/);
+  assert.match(JSON.stringify(seen[6].content), /PAGE_FIXTURE_OK/);
+  const events = await storedEvents(f, agent, [input], calls);
+  const results = events.filter(e => e.type === 'tool/result').map(e => JSON.stringify(e.data.message.content));
+  assert.match(results[0], /INPUT=27/);
+  assert.match(results[2], /RESULT=55/);
+  assert.match(results[4], /RESULT=54/);
+  assert.match(results[5], /PAGE_FIXTURE_OK/);
+  assert.deepEqual(events.filter(e => e.type === 'assistant/message').at(-1).data.message.content,
+    [{ type: 'text', text: '修正后的两倍是 54，页面返回 PAGE_FIXTURE_OK。' }]);
   assert.equal(pageReads, 1);
 });
 
@@ -160,6 +221,35 @@ function offered(name, properties) {
 const engineOnly = { skip: !process.env.DSH_PREFIX && 'DSH_PREFIX must name the patched runtime',
   timeout: 20000, concurrency: false };
 
+test('two full companion turns remember the first reply and persist its expression and second action', engineOnly, async t => {
+  const first = '给今天的风铃起一个代号吧。', second = '刚才的代号是什么？';
+  const marker = randomUUID();
+  const firstParts = ['[表情:开', '心]叫它风铃-' + marker + '。'];
+  const f = await createFixture({ withRecall: false, transport(request, n) {
+    if (n === 1) return textResponse(firstParts);
+    assert.equal(n, 2);
+    const previous = request.body.messages.filter(message => message.role === 'assistant').at(-1);
+    const text = typeof previous?.content === 'string' ? previous.content : previous?.content.find(b => b.type === 'text')?.text;
+    const remembered = /风铃-([0-9a-f-]{36})。/.exec(text);
+    assert(remembered, 'the first assistant reply must be in the second request');
+    return textResponse(['[动作:点', '头]我记得，风铃-' + remembered[1] + '。']);
+  } });
+  t.after(() => f.dispose());
+  const { agent } = await createStoredAgent(f, 'FULL_TWO_TURNS');
+  await f.send(agent, first);
+  await f.send(agent, second);
+  assert.deepEqual(f.requests.map(r => r.sessionId), [agent.id, agent.id]);
+  const events = await storedEvents(f, agent, [first, second], []);
+  const deltas = events.filter(e => e.type === 'assistant/message').map(e => f.engine.llm.expandAssistantStream(e.data.stream)
+    .filter(frame => frame.chunk?.type === 'text-delta').map(frame => frame.chunk.text));
+  assert.deepEqual(deltas, [firstParts, ['[动作:点', '头]我记得，风铃-' + marker + '。']]);
+  assert.deepEqual(events.filter(e => e.type === 'turn/start' || e.type === 'turn/end')
+    .map(e => [e.type, e.data.turn]), [['turn/start', 1], ['turn/end', 1], ['turn/start', 2], ['turn/end', 2]]);
+  assert.deepEqual(events.flatMap(e => e.type === 'assistant/message' ? [e.data.message.content[0].text]
+    : e.type === 'user/message' && e.data.source?.kind === 'user' ? [e.data.content[0].text] : []),
+    [first, '[表情:开心]叫它风铃-' + marker + '。', second, '[动作:点头]我记得，风铃-' + marker + '。']);
+});
+
 for (const kind of ['reminder', 'photo']) {
   test('full companion returns a phone ' + kind + ' result to its model and Session', engineOnly, async t => {
     const phoneFetch = globalThis.fetch;
@@ -180,7 +270,7 @@ for (const kind of ['reminder', 'photo']) {
       return textResponse(JSON.parse(lastTool(request, 'look')).description);
     } });
     try {
-      const { agent } = await f.createAgent('FULL_DEVICE_' + kind);
+      const { agent } = await createStoredAgent(f, 'FULL_DEVICE_' + kind);
       const defs = reminder ? [offered('reminder', Object.fromEntries(Object.keys(time).map(k => [k, { type: 'string' }])))]
         : [offered('photos_recent', { limit: { type: 'integer' } }), offered('photo_view', { id: { type: 'string' } })];
       const phone = await offerPhone(f, agent, requestId, defs, phoneFetch, t.signal);
@@ -199,9 +289,11 @@ for (const kind of ['reminder', 'photo']) {
           : [['list', 'photos_recent', { limit: 1 }], ['look', 'photo_view', { id: marker }]]);
         assert.equal(f.requests.length, reminder ? 2 : 3);
         assert(f.requests.every(r => r.sessionId === agent.id));
-        const events = agent.session.snapshotEvents();
-        assert.deepEqual(events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'user')
-          .map(e => [e.data.source.rpcId, e.data.content[0].text]), [[requestId, text]]);
+        const events = await storedEvents(f, agent, [text], reminder ? [['set', 'companion_reminder']]
+          : [['list', 'companion_photos_recent'], ['look', 'companion_photo_view']]);
+        assert.equal(events.find(e => e.type === 'user/message' && e.data.source?.kind === 'user').data.source.rpcId, requestId);
+        const results = events.filter(e => e.type === 'tool/result');
+        assert(results.every(e => JSON.stringify(e.data.message.content).includes(marker)));
         assert.deepEqual(events.filter(e => e.type === 'assistant/message').at(-1).data.message.content,
           [{ type: 'text', text: (reminder ? '提醒已登记，编号 ' : '合成照片里的白帆 ') + marker }]);
       } finally { await phone.close(); }
@@ -221,14 +313,16 @@ test('full companion taps the opted-in synthetic MCP button in the same agent tu
       args: [fileURLToPath(new URL('./fixtures/phone-caller-mcp.mjs', import.meta.url)), 'supported', '--button'],
       dshGoPhoneCaller: true, failOnStartupError: true, reconnect: { enabled: false },
     }).await();
-    const { agent } = await f.createAgent('FULL_MCP_BUTTON');
+    const { agent } = await createStoredAgent(f, 'FULL_MCP_BUTTON');
     await f.send(agent, '按一下测试按钮');
     assert.equal(f.requests.length, 2);
     assert(f.requests[0].body.tools.some(tool => tool.name === 'mcp__phone__tap'));
     const receipt = lastTool(f.requests[1], 'press');
     assert.match(receipt, /fixture-button-pressed-once/);
     assert.match(receipt, /FULL_MCP_BUTTON/);
-    const reply = agent.session.snapshotEvents().filter(e => e.type === 'assistant/message').at(-1);
+    const events = await storedEvents(f, agent, ['按一下测试按钮'], [['press', 'mcp__phone__tap']]);
+    assert(JSON.stringify(events.find(e => e.type === 'tool/result').data.message.content).includes('fixture-button-pressed-once'));
+    const reply = events.filter(e => e.type === 'assistant/message').at(-1);
     assert.deepEqual(reply.data.message.content, [{ type: 'text', text: receipt }]);
   } finally { await f.dispose(); }
 });

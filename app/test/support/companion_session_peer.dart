@@ -24,6 +24,9 @@ class CompanionSessionPeer extends DshClient {
   Completer<void>? releaseEcho;
   Completer<void>? releaseCommit;
   final scriptedWords = <String, String>{};
+  final replayDeltas = <String, List<String>>{};
+  final _streamRevision = <String, int>{};
+  Future<void> Function(int partNumber)? afterReplayPart;
   Future<void>? holdBeforeResponse;
   final firstPrompt = Completer<void>();
   final firstTurnEnded = Completer<void>();
@@ -48,7 +51,7 @@ class CompanionSessionPeer extends DshClient {
         'type': 'snapshot',
         'cursor': (records[sessionId]?.length ?? 0) - 1,
         'records': [for (final event in records[sessionId] ?? []) {'event': event}],
-        'assistantStream': {'revision': 0},
+        'assistantStream': {'revision': _streamRevision[sessionId] ?? 0},
       }),
     );
     return controller.stream;
@@ -107,22 +110,27 @@ class CompanionSessionPeer extends DshClient {
     });
     if (hold != null) await cancelled.future;
     final commit = releaseCommit;
-    final words = scriptedWords[text] ?? (commit == null ? '会话回复' : '[动作:点头]找到文件了。');
-    var revision = 0;
+    final parts = replayDeltas[text];
+    final words = parts?.join() ?? scriptedWords[text] ?? (commit == null ? '会话回复' : '[动作:点头]找到文件了。');
+    var nextIndex = 0;
     void stream(Map<String, Object?> frame) {
-      final data = {'type': 'assistant-stream', 'frame': {'attemptId': 'try-$turn', 'revision': ++revision, ...frame}};
+      final revision = _streamRevision.update(sessionId, (n) => n + 1, ifAbsent: () => 1);
+      final data = {'type': 'assistant-stream', 'frame': {'attemptId': 'try-$turn', 'revision': revision, ...frame}};
       for (final watch in _bySession[sessionId] ?? <StreamController<DshEvent>>[]) {
         watch.add(parseFollowFrame(sessionId, data));
       }
     }
-    if (commit != null) {
+    if (commit != null || parts != null) {
       event('step/start', {'turn': turn, 'step': 1});
       stream({'type': 'start', 'turn': turn, 'step': 1, 'startedAfterSeq': log.length - 1});
-      stream({'type': 'chunk', 'index': 0, 'time': 1795260000123,
+      stream({'type': 'chunk', 'index': nextIndex++, 'time': 1795260000123,
         'chunk': {'type': 'block-start', 'index': 0, 'blockType': 'text'}});
-      stream({'type': 'chunk', 'index': 1, 'time': 1795260000124,
-        'chunk': {'type': 'text-delta', 'index': 0, 'text': words}});
-      await commit.future;
+      for (final part in parts ?? [words]) {
+        stream({'type': 'chunk', 'index': nextIndex++, 'time': 1795260000124,
+          'chunk': {'type': 'text-delta', 'index': 0, 'text': part}});
+        if (parts != null && afterReplayPart != null) await afterReplayPart!(nextIndex - 1);
+      }
+      if (commit != null) await commit.future;
     }
     event('assistant/message', {
       'turn': turn,
@@ -132,9 +140,11 @@ class CompanionSessionPeer extends DshClient {
         'content': [{'type': 'reasoning', 'text': '不显示的内部推理'}, {'type': 'text', 'text': words}],
       },
     });
-    if (commit != null) {
-      stream({'type': 'end', 'index': 2, 'outcome': {'kind': 'committed', 'eventType': 'assistant/message', 'seq': log.length - 1}});
+    if (commit != null || parts != null) {
+      stream({'type': 'end', 'index': nextIndex, 'outcome': {'kind': 'committed', 'eventType': 'assistant/message', 'seq': log.length - 1}});
       event('step/end', {'turn': turn, 'step': 1});
+    }
+    if (commit != null) {
       event('step/start', {'turn': turn, 'step': 2});
       event('assistant/message', {'turn': turn, 'step': 2, 'message': {
         'role': 'assistant', 'content': [{'type': 'text', 'text': '里面有三行。'}],

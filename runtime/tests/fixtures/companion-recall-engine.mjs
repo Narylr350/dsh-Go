@@ -48,7 +48,9 @@ export function textResponse(text = 'Synthetic fixture reply', { model = 'c750-f
     { type: 'message_start', message: { id: 'synthetic-message', type: 'message', role: 'assistant', model,
       content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+    ...(Array.isArray(text) ? text : [text]).map(part => ({
+      type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: part },
+    })),
     { type: 'content_block_stop', index: 0 },
     { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 3 } },
     { type: 'message_stop' },

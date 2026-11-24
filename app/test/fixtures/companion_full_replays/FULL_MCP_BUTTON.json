@@ -1,0 +1,9 @@
+[
+  {
+    "input": "按一下测试按钮",
+    "parts": [
+      "fixture-button-pressed-once FULL_MCP_BUTTON"
+    ],
+    "output": "fixture-button-pressed-once FULL_MCP_BUTTON"
+  }
+]
