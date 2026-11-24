@@ -298,8 +298,9 @@ class _Sessions extends SessionsController {
 
   @override
   Future<String> createForConnection(HostConnection conn, {required bool Function() isCurrent, bool autoApprove = true}) async {
-    expect(isCurrent(), isTrue);
-    expect(autoApprove, isFalse);
+    // Called inside a pump: a guarded expect here would read as a Host failure.
+    expectSync(isCurrent(), isTrue);
+    expectSync(autoApprove, isFalse);
     return 'fresh-${++created}';
   }
 }
