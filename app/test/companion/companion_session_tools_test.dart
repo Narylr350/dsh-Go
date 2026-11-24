@@ -80,12 +80,15 @@ void main() {
     ));
     bindings.add((
       definition: const CompanionAgentTool(name: 'recall', description: 'memory', inputSchema: {'type': 'object'}),
-      execute: (_) async => CompanionAgentToolResult(externalNoticeContent: true, content: jsonEncode({
-        'selection': {'items': [
-          {'id': 'fact', 'text': '偏好'},
-          {'id': 'private', 'text': '通知正文', 'source': {'kind': 'notice'}},
-        ]},
-      })),
+      execute: (call) async {
+        expect(call.forHostSession, isTrue);
+        return CompanionAgentToolResult(externalNoticeContent: true, content: jsonEncode({
+          'selection': {'items': [
+            {'id': 'fact', 'text': '偏好'},
+            {'id': 'private', 'text': '通知正文', 'source': {'kind': 'notice'}},
+          ]},
+        }));
+      },
     ));
     final phone = await CompanionSessionTools.open(
       client, sessionId: 'cabin', requestId: 'turn', tools: bindings, isCurrent: () => true,

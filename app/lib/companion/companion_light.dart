@@ -240,12 +240,15 @@ class CompanionAgentTool {
 }
 
 class CompanionAgentToolCall {
-  const CompanionAgentToolCall({required this.id, required this.name, required this.input, this.isCancelled});
+  const CompanionAgentToolCall({
+    required this.id, required this.name, required this.input, this.isCancelled, this.forHostSession = false,
+  });
 
   final String id;
   final String name;
   final Map<String, Object?> input;
   final bool Function()? isCancelled;
+  final bool forHostSession;
 }
 
 class CompanionAgentToolResult {

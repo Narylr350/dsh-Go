@@ -589,6 +589,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
     required String toolName,
     required MemoryRow input,
     List<String>? rankedRecallIds,
+    bool includeRecallNotices = true,
   }) {
     _PendingRawErase? candidate;
     String? runtimeState;
@@ -605,7 +606,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
         if (toolName == 'recall' && call['state'] == 'applied') {
           try {
             final source = _agentCheckCurrent(turn);
-            selection = _agentRecallSelection(turn, input, rankedRecallIds, source?['text'] as String?);
+            selection = _agentRecallSelection(turn, input, rankedRecallIds, source?['text'] as String?, includeRecallNotices);
             _grantAgentSelection(turn, selection);
             control = _agentRecallControl(turn, input, replayedCall: call);
           } on _AgentMemoryRejected {
@@ -690,7 +691,7 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
           case 'ask_later':
             effect = _agentAskLater(turn, _agentToolSource(turn, input), callId, input);
           case 'recall':
-            recallSelection = _agentRecallSelection(turn, input, rankedRecallIds, source?['text'] as String?);
+            recallSelection = _agentRecallSelection(turn, input, rankedRecallIds, source?['text'] as String?, includeRecallNotices);
             recalledControl = _agentRecallControl(turn, input);
             effect = (changed: <String>{}, target: recalledControl?['topic_id'] as String?);
           default:
@@ -760,12 +761,15 @@ extension CompanionAgentMemoryStore on CompanionMemoryStore {
     return _rawEraseResult(result, fallback: runtimeState);
   }
 
-  MemorySelection _agentRecallSelection(Row turn, MemoryRow input, List<String>? rankedIds, String? explicitUserInput) {
+  MemorySelection _agentRecallSelection(
+    Row turn, MemoryRow input, List<String>? rankedIds, String? explicitUserInput, bool includeNotices,
+  ) {
     final query = _agentText(input, 'query');
-    final candidates = [
-      for (final card in memoryRetrievalCandidates(characterId: turn['character_id'] as String?, input: explicitUserInput))
-        if (turn['origin_kind'] == 'chat' || card['collection'] != 'recent') card,
-    ];
+    final candidates = memoryRetrievalCandidates(
+      characterId: turn['character_id'] as String?,
+      input: explicitUserInput,
+      includeNotices: includeNotices && turn['origin_kind'] == 'chat',
+    );
     final explicit = <String>{
       for (final card in candidates)
         if (card['topic_mode'] == 'never') card['topic_id']! as String,

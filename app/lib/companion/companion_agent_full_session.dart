@@ -365,6 +365,7 @@ class _CompanionFullSession {
           offsetMinutes: run.source['offset_minutes']! as int,
           explicitUserInput: run.source['text']! as String,
           isCurrent: current,
+          includeNotices: false,
         );
         if (!current()) return;
         if (companionSelectionHasNotice(cards)) {

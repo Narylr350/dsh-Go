@@ -209,6 +209,7 @@ class CompanionAgentMemoryTools {
         toolName: call.name,
         input: call.input,
         rankedRecallIds: rankedRecallIds,
+        includeRecallNotices: !call.forHostSession,
       );
     } on DshRemoteException catch (error) {
       return _failure(error.code);

@@ -44,6 +44,7 @@ extension CompanionMemoryScopeStore on CompanionMemoryStore {
     required String? characterId,
     String? input,
     Set<String> explicitTopicIds = const {},
+    bool includeNotices = true,
   }) {
     _checkMemoryCharacter(characterId);
     final at = _checkedNow();
@@ -52,7 +53,9 @@ extension CompanionMemoryScopeStore on CompanionMemoryStore {
     final explicit = {...explicitTopicIds, if (input != null) ...explicitMemoryTopics(input, domain)};
     final candidates = [
       for (final card in domain)
-        if (card['layer'] == 'card' && isMemoryContextEligible(card, nowMs: at, explicitTopicIds: explicit)) card,
+        if (card['layer'] == 'card' &&
+            (includeNotices || card['collection'] != 'recent') &&
+            isMemoryContextEligible(card, nowMs: at, explicitTopicIds: explicit)) card,
     ];
     if (candidates.isEmpty) return candidates;
     final stale = _staleReferenceRoots([for (final card in candidates) card['id'] as String]);

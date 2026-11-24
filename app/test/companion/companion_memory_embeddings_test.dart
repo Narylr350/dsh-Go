@@ -10,6 +10,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import 'package:dsh_app/companion/companion_agent_tools.dart';
+import 'package:dsh_app/companion/companion_light.dart';
 import 'package:dsh_app/companion/companion_memory_embeddings.dart';
 import 'package:dsh_app/companion/companion_local.dart';
 import 'package:dsh_app/companion/companion_memory.dart';
@@ -100,6 +102,75 @@ void main() {
     if (memory == null) store.close();
     await directory.delete(recursive: true);
   });
+
+  for (final promptOnly in [true, false]) {
+    test('notice budget on the ${promptOnly ? 'durable prompt' : 'recall tool'} route', () async {
+      final a = store.ensureCompanionCharacter(sourceKey: 'test:notice-budget-a')['id']! as String;
+      final b = store.ensureCompanionCharacter(sourceKey: 'test:notice-budget-b')['id']! as String;
+      final notices = [
+        for (var i = 0; i < 8; i++)
+          store.rememberNotice(
+            eventId: (i + 1).toRadixString(16).padLeft(64, '0'),
+            notificationKey: (i + 999).toRadixString(16).padLeft(64, '0'),
+            packageName: 'example.calendar', appName: '活动日历', text: '灯塔开放通知$i：${'海' * 60}',
+            observedAtMs: now, expectedControlRevision: store.archive['control_revision']! as int,
+          )!,
+      ];
+      final fact = shared('灯塔路线是沿海走，${'路' * 415}');
+      final foreign = story(b, '乙留下的灯塔路线');
+      native = (call) async {
+        if (call.method == 'load') return {'modelKey': 'notice-budget', 'dimensions': 512};
+        final args = Map<String, Object?>.from(call.arguments as Map);
+        final texts = (args['texts'] as List).cast<String>();
+        return [for (final text in texts) unit(args['query'] == true || text.startsWith('灯塔开放通知') ? 0 : 1)];
+      };
+      final memory = CompanionMemoryOwner(
+        store, CompanionLocal.at(directory, nowMilliseconds: () => now),
+        nowMilliseconds: () => now, embeddings: embeddings,
+      );
+      owner = memory;
+      final phone = await memory.selectForAgent('灯塔路线', characterId: a, offsetMinutes: 0, isCurrent: () => true);
+      final allowedPhoneIds = notices.map((row) => row['id']).toSet();
+      expect(phone.ids, isNotEmpty);
+      expect(phone.ids.every(allowedPhoneIds.contains), isTrue);
+      if (promptOnly) {
+        final host = await memory.selectForAgent(
+          '灯塔路线', characterId: a, offsetMinutes: 0, isCurrent: () => true, includeNotices: false,
+        );
+        expect(host.ids, [fact['id']]);
+        expect(host.block, isNot(contains('灯塔开放通知')));
+        expect(host.block, isNot(contains(foreign['text']! as String)));
+        return;
+      }
+      for (final forHost in [true, false]) {
+        final source = store.submitMessage(
+          id: id(), sessionId: forHost ? 'host:budget' : 'light:budget', characterId: a,
+          text: '灯塔路线', saidAtUtc: now, offsetMinutes: 0,
+        );
+        final tools = CompanionAgentMemoryTools(
+          memory: memory, source: source, isCurrent: () => true, forgottenNotice: '',
+          onCommitted: ({required memory, required sourceId, required beforeRevision, required revision}) {},
+          semanticRecall: (query) => memory.recallIds(query, characterId: a, isCurrent: () => true),
+        );
+        final call = CompanionAgentToolCall(id: 'same-read', name: 'recall', input: const {'query': '灯塔路线'},
+            forHostSession: forHost);
+        for (final result in [await tools.execute(call), await tools.execute(call)]) {
+          expect(result.isError, isFalse);
+          expect(result.externalNoticeContent, !forHost);
+          final rows = (jsonDecode(result.content) as Map)['selection']['items'] as List;
+          final expected = forHost ? [fact['id']] : phone.ids;
+          expect(rows.map((row) => row['id']), expected);
+          expect(result.content.contains('灯塔开放通知'), !forHost);
+          expect(result.content, isNot(contains(foreign['text']! as String)));
+          final grant = store.beginAgentTurn(
+            messageId: source['id']! as String, expectedSourceRev: 1, shownCardRevisions: const {},
+          )['shown_cards'] as Map;
+          expect(grant.keys, unorderedEquals(expected));
+        }
+        tools.close();
+      }
+    });
+  }
 
   test('prompt and recall fit lower-ranked short cards within the active role', () async {
     final a = store.ensureCompanionCharacter(sourceKey: 'test:budget-a')['id']! as String;

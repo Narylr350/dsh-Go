@@ -388,6 +388,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
     required int offsetMinutes,
     required bool Function() isCurrent,
     String? explicitUserInput,
+    bool includeNotices = true,
   }) async {
     final revision = store.archive['control_revision']! as int;
     bool current() => !_disposed && isCurrent() && store.archive['control_revision'] == revision;
@@ -404,7 +405,9 @@ class CompanionMemoryOwner extends ChangeNotifier {
             limit: null, // Lower-ranked short cards can still fit the prompt budget.
           );
     if (!current()) throw const CompanionMemoryRetrievalCancelled();
-    final cards = store.memoryRetrievalCandidates(characterId: characterId, input: explicitUserInput);
+    final cards = store.memoryRetrievalCandidates(
+      characterId: characterId, input: explicitUserInput, includeNotices: includeNotices,
+    );
     // Scope resolved the invitation in the whole domain. Its matching row
     // can belong to a fixed layer, outside these returned ordinary candidates.
     final explicit = <String>{
