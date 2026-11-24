@@ -83,6 +83,7 @@ class CompanionAlwaysOnOwner {
   String? _packName;
   String get _name => _givenName ?? _packName ?? 'Companion';
   String? _reply;
+  ({CompanionMoves moves, CompanionReplyStream reader})? _replyStream;
   String? _sentText;
   bool? _sentRunning;
   int _sentSteps = 0;
@@ -237,6 +238,7 @@ class CompanionAlwaysOnOwner {
     final reply = agent.replyId;
     if (reply != _reply) {
       _reply = reply;
+      _replyStream = null;
       _sentText = null;
       _sentRunning = null;
       _sentSteps = 0;
@@ -245,13 +247,18 @@ class CompanionAlwaysOnOwner {
     }
     final text = agent.text;
     final raw = _textAfterControl <= text.length ? text.substring(_textAfterControl) : '';
-    final moves = _resident!.moves;
-    final parsed = !agent.hasSessionReply ? null : parseCompanionReply(
-      raw,
-      streaming: agent.running,
-      emotions: moves.emotionLabels,
-      actions: moves.actionLabels,
-    );
+    CompanionReply? parsed;
+    if (agent.hasSessionReply) {
+      final moves = _resident!.moves;
+      var stream = _replyStream;
+      if (stream == null || !identical(stream.moves, moves)) {
+        stream = _replyStream = (
+          moves: moves,
+          reader: CompanionReplyStream(emotions: moves.emotionLabels, actions: moves.actionLabels),
+        );
+      }
+      parsed = stream.reader.read(raw, streaming: agent.running);
+    }
     final activity = agent.sessionActivity;
     final visible = parsed == null ? raw.trim() : activity ??
         (parsed.words.isEmpty && !agent.running && _sentText != null
@@ -378,6 +385,7 @@ class CompanionAlwaysOnOwner {
     unawaited(overlay.clearCompanion());
     ++_outputGeneration;
     _textAfterControl = agent.text.length;
+    _replyStream = null;
     _sentText = null;
     final epoch = _status.epoch;
     _notificationQueue = _notificationQueue.catchError((Object _) {}).then((_) => channel.clear(epoch));
@@ -405,6 +413,7 @@ class CompanionAlwaysOnOwner {
     }
     _resident = null;
     _reply = null;
+    _replyStream = null;
     _sentText = null;
     _sentRunning = null;
   }
