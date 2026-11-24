@@ -571,6 +571,7 @@ class ChatController extends Notifier<ChatState> {
   /// The loaded durable log and the session header (deliverables, artifacts:
   /// see `artifacts.dart`). [ChatState.turns] changes whenever the log does.
   Iterable<SessionLogEvent> get events => _transcript.events;
+  Iterable<SessionLogEvent> eventsFrom(int seq) => _transcript.eventsFrom(seq);
   int? get oldestSeq => _transcript.oldestSeq;
   SessionHeader? get header => _transcript.header;
 

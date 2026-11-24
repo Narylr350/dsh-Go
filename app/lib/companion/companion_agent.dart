@@ -31,6 +31,7 @@ import 'companion_agent_task_ui.dart';
 import 'companion_agent_tools.dart';
 import 'companion_context.dart';
 import 'companion_session_tools.dart';
+import 'companion_session_reply.dart';
 import 'companion_host_memory_transport.dart';
 import 'companion_light.dart';
 import 'companion_memory.dart';

@@ -137,7 +137,7 @@ class _CompanionFullSession {
     final ended = Completer<void>();
     String? requestId;
     int? echoSeq;
-    Set<String>? previousSteps;
+    CompanionSessionReply? reply;
     CompanionSessionTools? devices;
     void finish({bool saveReply = false}) {
       if (ended.isCompleted) return;
@@ -199,33 +199,10 @@ class _CompanionFullSession {
           .firstOrNull;
       if (trace == null) return;
       run.hasSessionReply = true;
-      // Interrupt may steer a still-running turn. A step already in flight
-      // before our echo belongs to that earlier input, even if it commits late.
-      if (previousSteps == null) {
-        final earlier = controller.events.where((e) => trace.startSeq <= e.seq && e.seq < echoSeq!);
-        previousSteps = {
-          if (earlier.whereType<UserMessageEvent>().any((e) => e.isHumanPrompt))
-            for (final event in earlier.whereType<StepStartedEvent>()) 'm${event.turn}.${event.step}',
-        };
-      }
-      final parts = <String>[];
-      var ourInputIsLatest = true;
-      for (final item in state.items.reversed) {
-        if (item is UserChatItem) {
-          if (item.seq == echoSeq) break;
-          if (item.seq < echoSeq!) return;
-          // A later person also spoke in this session. Their reply and
-          // pending controls do not belong to this room input.
-          ourInputIsLatest = false;
-          parts.clear();
-        } else if (item is AssistantChatItem &&
-            item.rowKey?.startsWith('m${trace.turn}.') == true &&
-            !previousSteps!.contains(item.rowKey) &&
-            item.text.isNotEmpty) {
-          parts.add(item.text);
-        }
-      }
-      final text = parts.reversed.join('\n');
+      final scope = reply ??= CompanionSessionReply(trace.startSeq, echoSeq!);
+      scope.observe(controller.eventsFrom(scope.nextSeq), endSeq: trace.endSeq);
+      final ourInputIsLatest = scope.ownsLatest;
+      final text = scope.text(state.items);
       final waiting = ourInputIsLatest && trace.running && (state.openApproval != null || state.questions.isNotEmpty);
       final activity = switch ((ourInputIsLatest && trace.running, state.openApproval, trace.current)) {
         (false, _, _) => null,
@@ -238,13 +215,13 @@ class _CompanionFullSession {
       run.text = text;
       run.sessionActivity = activity;
       run.waitingForOwner = waiting;
-      if (trace.spans.any((s) => s.kind == TraceKind.tool && s.seq > echoSeq!)) run.toolDispatchStarted = true;
+      if (scope.toolDispatched) run.toolDispatchStarted = true;
       if (trace.endSeq != null) {
         if (prepared?.requestId == req) {
           prepared = null;
           selectedCards = null;
         }
-        final failure = trace.endReason?.error;
+        final failure = scope.ownsLastStep ? trace.endReason?.error : null;
         if (failure != null) run.error = CompanionHostError(companionHostFailure(failure.code), failure.message);
         finish(saveReply: true);
         visit.refreshHostUsage();
