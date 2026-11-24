@@ -7,6 +7,32 @@ import 'package:test/test.dart';
 
 import 'support/old_memory_schema.dart';
 
+/// Count hydrated card rows without substituting SQLite queries or results.
+class _CardReadCounter implements Database {
+  _CardReadCounter(this.database);
+  final Database database;
+  int cardRows = 0;
+
+  @override
+  ResultSet select(String sql, [List<Object?> parameters = const []]) {
+    final rows = database.select(sql, parameters);
+    if (rows.columnNames.contains('topic_mode') && rows.columnNames.contains('collection')) cardRows += rows.length;
+    return rows;
+  }
+
+  @override
+  PreparedStatement prepare(String sql, {bool persistent = false, bool vtab = true, bool checkNoTail = false}) =>
+      database.prepare(sql, persistent: persistent, vtab: vtab, checkNoTail: checkNoTail);
+  @override
+  void execute(String sql, [List<Object?> parameters = const []]) => database.execute(sql, parameters);
+  @override
+  bool get autocommit => database.autocommit;
+  @override
+  void close() => database.close();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 /// A stored message on the fields a test captured from it: the store may also
 /// carry its own extraction bookkeeping on the row.
 Map<String, Object?> _captured(CompanionMemoryStore store, Map<String, Object?> like) {
@@ -2940,6 +2966,34 @@ void main() {
           .any((row) => row['id'] == 'legacy-assistant' || row['id'] == 'other-user'),
       isFalse,
     );
+  });
+
+  test('extract prices all candidates without rehydrating the full role domain per card', () {
+    store.close();
+    final reads = _CardReadCounter(sqlite3.open('${directory.path}/memory.sqlite'));
+    database = reads;
+    store = CompanionMemoryStore(database, nowMilliseconds: () => now, createId: id);
+    final role = character('scope:prices');
+    const count = 32;
+    final cards = [for (var i = 0; i < count; i++) seed('共享事实 $i')];
+    store.submitMessage(id: 'current', sessionId: 'active', text: '说说这些事实',
+        saidAtUtc: now, offsetMinutes: 0, characterId: role);
+    final considered = <String>{};
+    reads.cardRows = 0;
+    final claim = store.nextAgentMaintenance(
+      kind: 'extract', offsetMinutes: 0, forceTail: true, estimateTokens: (_) => 8,
+      estimateContextTokens: (context) {
+        final proposed = context['cards'] as List<MemoryRow>;
+        considered.addAll(proposed.map((row) => row['id']! as String));
+        return proposed.length > 2 ? memoryBatchInputTokens + 1 : 50;
+      },
+    )!;
+    expect(considered, {for (final row in cards) row['id']});
+    expect(reads.cardRows, lessThanOrEqualTo(8 * count));
+    final active = store.beginAgentMaintenance(kind: 'extract', claimId: claim['id']! as String, characterId: role);
+    expect((active['cards'] as List<MemoryRow>).map((row) => row['id']),
+        [for (final row in cards.take(2)) row['id']]);
+    store.finishAgentMaintenance(turnId: active['id']! as String, complete: true);
   });
 
   test('maintenance roles share one write budget and every continuation has its own usage receipt', () {

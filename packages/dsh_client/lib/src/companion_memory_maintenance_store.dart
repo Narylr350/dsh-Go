@@ -19,7 +19,6 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
       String? character, {
       String? localDay,
       String? zoneId,
-      bool checked = false,
     }) => _planAgentMaintenanceContext(
       kind: kind,
       characterId: character,
@@ -27,11 +26,15 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
       zoneId: zoneId,
       sources: sources,
       cards: cards,
-      checked: checked,
       estimateTokens: estimateTokens,
       estimateContextTokens: estimateContextTokens,
     );
-    int size(List<MemoryRow> sources, List<MemoryRow> cards, {String? localDay, String? zoneId}) {
+    int size(
+      List<MemoryRow> sources, {
+      List<MemoryRow> Function(String?)? cardsFor,
+      String? localDay,
+      String? zoneId,
+    }) {
       final scopes = <String?>{
         if (kind == 'organize') null,
         for (final source in sources) source['character_id'] as String?,
@@ -41,7 +44,7 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
         maximum = math.max(
           maximum,
           _agentContextTokens(
-            context(sources, cards, character, localDay: localDay, zoneId: zoneId),
+            context(sources, cardsFor?.call(character) ?? const [], character, localDay: localDay, zoneId: zoneId),
             estimateTokens,
             estimateContextTokens,
           ),
@@ -89,13 +92,36 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
     }
     // Keep the original queue/readiness/whole-source selection. Only its size
     // callback changes to the complete body that the actual scoped lane sends.
-    final batch = kind == 'extract'
-        ? _nextBatch(
-            forceTail: forceTail,
-            estimateTokens: estimateTokens,
-            estimateInputTokens: (sources, cards) => size(sources, cards),
-          )
-        : null;
+    MemoryBatch? extractBatch() {
+      // This index belongs only to _nextBatch's synchronous SQLite transaction.
+      // Beginning or restoring a claim still reads current source/card revisions.
+      final domains = <String?, Map<String, ({int order, MemoryRow card})>>{};
+      List<MemoryRow> forScope(String? character, List<MemoryRow> requested) {
+        if (requested.isEmpty) return const [];
+        final domain = domains.putIfAbsent(character, () {
+          final rows = _memoryDomainCards(character, where: "AND c.collection!='recent' AND c.status!='withdrawn'");
+          final stale = _staleReferenceRoots([for (final row in rows) row['id'] as String]);
+          return {
+            for (var i = 0; i < rows.length; i++)
+              if (!stale.contains(rows[i]['id'])) rows[i]['id'] as String: (order: i, card: rows[i]),
+          };
+        });
+        final selected = [
+          for (final card in requested)
+            if (domain[card['id']] case final current?)
+              if (current.card['row_rev'] == card['row_rev']) current,
+        ]..sort((a, b) => a.order.compareTo(b.order));
+        return [for (final row in selected) row.card];
+      }
+
+      return _nextBatch(
+        forceTail: forceTail,
+        estimateTokens: estimateTokens,
+        estimateInputTokens: (sources, cards) => size(sources, cardsFor: (character) => forScope(character, cards)),
+      );
+    }
+
+    final batch = kind == 'extract' ? extractBatch() : null;
     if (kind == 'extract' && batch == null) return null;
     return _transaction(() {
       final at = _checkedNow();
@@ -132,7 +158,7 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
           if (prior.isEmpty || sources.any((source) => source['id'] == prior.single['id'])) continue;
           final candidate = [...sources, Map<String, Object?>.from(prior.single)]
             ..sort((a, b) => (a['first_seq'] as int).compareTo(b['first_seq'] as int));
-          if (size(candidate, const []) <= memoryBatchInputTokens) {
+          if (size(candidate) <= memoryBatchInputTokens) {
             sources
               ..clear()
               ..addAll(candidate);
@@ -156,7 +182,7 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
           return null;
         }
         if (_agentContextTokens(
-              context(const [], const [], null, localDay: localDay, zoneId: 'offset:$offsetMinutes', checked: true),
+              context(const [], const [], null, localDay: localDay, zoneId: 'offset:$offsetMinutes'),
               estimateTokens,
               estimateContextTokens,
             ) >
@@ -177,7 +203,7 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
           if (row['role'] == 'assistant' && row['character_id'] == null) continue;
           final candidate = [...sources, Map<String, Object?>.from(row)]
             ..sort((a, b) => (a['first_seq'] as int).compareTo(b['first_seq'] as int));
-          if (size(candidate, const [], localDay: localDay, zoneId: 'offset:$offsetMinutes') <=
+          if (size(candidate, localDay: localDay, zoneId: 'offset:$offsetMinutes') <=
               memoryBatchInputTokens) {
             sources
               ..clear()
@@ -246,7 +272,7 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
               }
               final candidate = [...sources, source]
                 ..sort((a, b) => (a['first_seq'] as int).compareTo(b['first_seq'] as int));
-              if (size(candidate, const [], localDay: localDay, zoneId: 'offset:$offsetMinutes') <=
+              if (size(candidate, localDay: localDay, zoneId: 'offset:$offsetMinutes') <=
                   memoryBatchInputTokens) {
                 sources
                   ..clear()
@@ -296,7 +322,6 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
             character,
             localDay: localDay,
             zoneId: zoneId,
-            checked: true,
           );
           if (_agentContextTokens(candidate, estimateTokens, estimateContextTokens) > memoryBatchInputTokens) continue;
           selected.add(card);
@@ -307,7 +332,6 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
           character,
           localDay: localDay,
           zoneId: zoneId,
-          checked: true,
         );
         if (kind == 'organize') {
           final sourceWork = (selectedContext['sources'] as List<MemoryRow>).any(
@@ -377,26 +401,9 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
     required List<MemoryRow> cards,
     required int Function(String) estimateTokens,
     required int Function(MemoryRow)? estimateContextTokens,
-    bool checked = false,
   }) {
     final scopedSources = _agentSourcesForScope(sources, characterId, kind, localDay: localDay);
-    // [checked]: the claim's own selection, already taken from this scope's
-    // domain in its order and filtered the same way, in this transaction.
-    // Reading the domain again per tried card made one selection O(cards²).
-    List<MemoryRow> current() {
-      final revisions = {for (final card in cards) card['id']: card['row_rev']};
-      return [
-        for (final card in _memoryDomainCards(characterId))
-          if (card['collection'] != 'recent' &&
-              revisions[card['id']] == card['row_rev'] &&
-              card['status'] != 'withdrawn' &&
-              _memoryReferencesCurrent(card['id'] as String))
-            card,
-      ];
-    }
-
-    final selected = checked ? cards : current();
-    final context = _agentContext(characterId, localDay, zoneId, scopedSources, selected, const []);
+    final context = _agentContext(characterId, localDay, zoneId, scopedSources, cards, const []);
     if (_agentContextTokens(context, estimateTokens, estimateContextTokens) > memoryBatchInputTokens) return context;
     final tickets = <MemoryRow>[];
     // Presentation metadata is optional, selected newest first and then sent
