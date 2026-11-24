@@ -208,7 +208,7 @@
     },
     {
       "path": "runtime/tests/fixtures/companion-recall-engine.mjs",
-      "sha256": "bd0996feffc59aafef786ba6a71a98271308a78d91a8913da7a7cc54a6936554"
+      "sha256": "88edb9d30735ad72f3204c8a8ea8cfce0f0a75295ec41dc7170ed6b8e09ef989"
     },
     {
       "path": "tooling/companion/fixtures/phone-context.json",
