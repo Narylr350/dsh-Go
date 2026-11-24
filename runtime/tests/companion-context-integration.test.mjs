@@ -106,10 +106,10 @@ async function http(t, f, store = f.store) {
   const server = createServer((req, res) => { void routes.handle(req, res, new URL(req.url, 'http://fixture').pathname); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-  return body => new Promise((resolve, reject) => {
+  return (body, endpoint = 'prompt-context') => new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = httpRequest({ host: '127.0.0.1', port: server.address().port,
-      path: '/dsh-go/v1/companion/prompt-context', method: 'POST',
+      path: '/dsh-go/v1/companion/' + endpoint, method: 'POST',
       headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) },
     }, res => {
       const chunks = []; res.on('data', value => chunks.push(value));
@@ -219,4 +219,34 @@ integration('same-id replacement Session and new bridge policy never copy old si
     s.commit(oldSession, f.message('old'), f.now()); s.end(oldSession);
     assert.equal(s.render(agent), '');
   } finally { agent.session = oldSession; }
+});
+
+integration('a fresh companion restores its saved model; an explicit choice of the host default is preserved', async t => {
+  const f = await createFixture({ withRecall: false });
+  t.after(() => f.dispose());
+  const request = await http(t, f);
+  const saved = { provider: f.route.provider, model: f.route.model, reasoningEffort: f.route.reasoningEffort };
+  const initial = { ...saved, model: 'host-default' };
+  for (const explicit of [false, true]) {
+    const { agent } = await f.createAgent('MODEL-' + explicit, {
+      preset: 'ordinary', options: initial, setup: scope => { f.engine.agent.installModelSelection(scope); },
+    });
+    await f.switchPreset(agent, 'dsh-go-companion-full');
+    const selections = () => agent.session.snapshotEvents(0).filter(event => event.type === 'model/selection');
+    assert.deepEqual(agent.model.current(), initial);
+    assert.deepEqual(selections(), []);
+    if (explicit) agent.model.select(initial);
+    const restore = () => request({ sessionId: agent.id, model: saved }, 'restore-model');
+    const result = await restore();
+    if (explicit) {
+      assert.equal(result.status, 409);
+      assert.equal(result.body.error.code, 'companion/selection-changed');
+      assert.deepEqual(agent.model.current(), initial);
+    } else {
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.body.model, saved);
+      assert.equal((await restore()).status, 200);
+    }
+    assert.deepEqual(selections().map(e => e.data), [explicit ? initial : saved]);
+  }
 });
