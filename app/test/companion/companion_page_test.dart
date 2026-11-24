@@ -267,13 +267,16 @@ class _RoomMemory2 extends _ReceiptMemory {
   }
 }
 
+/// The session follow publishes durable events on a coalescing timer.
+const _sessionFrame = Duration(milliseconds: 32);
+
 /// Waits until every receipt [memory] has retained, including ones retained
 /// while waiting, has settled: the whole Agent turn, all its model rounds.
-Future<void> _drained(WidgetTester tester, _ReceiptMemory memory) async {
+Future<void> _drained(WidgetTester tester, _ReceiptMemory memory, {Duration? step}) async {
   for (var seen = 0; seen < memory.receipts.length;) {
     final batch = memory.receipts.sublist(seen);
     seen = memory.receipts.length;
-    await settleMixed(tester, Future.wait(batch.map((receipt) => receipt.catchError((Object _) {}))));
+    await settleMixed(tester, Future.wait(batch.map((receipt) => receipt.catchError((Object _) {}))), step: step);
   }
   await tester.pump();
 }
@@ -2087,7 +2090,7 @@ void main() {
             }
             await tester.pumpWidget(const SizedBox());
             if (handling != null) {
-              await settleMixed(tester, handling);
+              await settleMixed(tester, handling, step: _sessionFrame);
             }
             if (!disposed) {
               memory.dispose();
@@ -2290,7 +2293,7 @@ void main() {
               releasePost.complete();
             }
           }
-          await _drained(tester, memory);
+          await _drained(tester, memory, step: _sessionFrame);
           final posts = peer.calls.where((call) => call.method == 'POST' && call.uri.path == notesPath).toList();
           if (!accepted) {
             expect(memory.store.tasks(), isEmpty);
@@ -2358,8 +2361,7 @@ void main() {
           await tester.pumpWidget(const SizedBox());
           // The real HttpClient keeps its idle connection on a 15-second fake-clock timer.
           await tester.pump(const Duration(seconds: 16));
-          // Fails on CI since the move to her full session (Pro A21 has no passing run yet); back with Pro's fix.
-        }, skip: scenario == 'accepted');
+        });
       }
 
       for (final scenario in [
@@ -2713,7 +2715,7 @@ void main() {
             }
             await tester.pumpWidget(const SizedBox());
             if (handling != null) {
-              await settleMixed(tester, handling);
+              await settleMixed(tester, handling, step: _sessionFrame);
             }
             if (!disposed) {
               memory.dispose();
@@ -2891,7 +2893,7 @@ void main() {
             await tester.pumpWidget(const SizedBox());
             releasePost.complete();
           }
-          await _drained(tester, memory);
+          await _drained(tester, memory, step: _sessionFrame);
           final accepted = scenario == 'accepted' || scenario == 'leave-after-acceptance';
           final posts = peer.calls.where((call) => call.method == 'POST' && call.uri.path == notesPath).toList();
           if (!accepted) {
@@ -2951,8 +2953,7 @@ void main() {
           await tester.pumpWidget(const SizedBox());
           // The real HttpClient keeps its idle connection on a 15-second fake-clock timer.
           await tester.pump(const Duration(seconds: 16));
-          // Fails on CI since the move to her full session (Pro A21 has no passing run yet); back with Pro's fix.
-        }, skip: scenario == 'accepted');
+        });
       }
 
       for (final scenario in ['no-saved-inputs', 'queued-behind-two-hundred-tasks', 'already-possible']) {
@@ -3580,7 +3581,7 @@ void main() {
               }
               releaseCreate.complete();
             }
-            await settleMixed(tester, handling!);
+            await settleMixed(tester, handling!, step: _sessionFrame);
             await tester.pump();
             final source = memory.store.messages().singleWhere((row) => row['role'] == 'user');
             expect(source['text'], raw);
@@ -3733,7 +3734,7 @@ void main() {
               if (!release.isCompleted) release.complete();
             }
             await tester.pumpWidget(const SizedBox());
-            if (handling != null) await settleMixed(tester, handling);
+            if (handling != null) await settleMixed(tester, handling, step: _sessionFrame);
             for (final receipt in receiptFutures) {
               await settleMixed(tester, receipt);
             }
@@ -3746,8 +3747,7 @@ void main() {
             tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
             if (previousLifecycle != null) tester.binding.handleAppLifecycleStateChanged(previousLifecycle);
           }
-          // Fails on CI since the move to her full session (Pro A21 has no passing run yet); back with Pro's fix.
-        }, skip: true);
+        });
       }
 
       for (final (kind, scenario) in [
@@ -4111,7 +4111,7 @@ void main() {
           if (acceptedScenario) {
             await settleMixed(tester, posted.future);
           }
-          await settleMixed(tester, handling);
+          await settleMixed(tester, handling, step: _sessionFrame);
           await tester.pump();
           final sources = memory.store.messages().where((row) => row['role'] == 'user').toList();
           expect(sources.first['text'], raw);
@@ -4163,7 +4163,7 @@ void main() {
               await tester.pump();
               await tester.tap(find.byIcon(AppIcons.send).last);
               await settleMixed(tester, cancelled.future);
-              await _drained(tester, memory);
+              await _drained(tester, memory, step: _sessionFrame);
               expect(memory.store.hostTask(row['task_id']! as String)!['state'], 'cancelled');
               expect(memory.store.hostTaskCommands(row['task_id']! as String), hasLength(2));
               expect(memory.store.messages().last['session_id'], sourceRoom);
@@ -4208,8 +4208,7 @@ void main() {
             isFalse,
           );
           await cleanUp();
-          // Fails on CI since the move to her full session (Pro A21 has no passing run yet); back with Pro's fix.
-        }, skip: scenario == 'accepted' || (kind == 'H' && scenario == 'cancel-after-acceptance'));
+        });
       }
 
       for (final scenario in ['first-delivery', 'over-one-hundred-tasks-before-and-after', 'already-possible']) {
