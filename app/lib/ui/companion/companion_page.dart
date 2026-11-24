@@ -1911,41 +1911,35 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   Future<void> _writeLines() async {
     if (!mounted || _character.lines != null || _ownWhale) return;
     final (:character, :fingerprint, :key) = _linesKey();
-    final cached = await companionLinesCached(character, fingerprint);
-    if (!mounted) return;
-    if (cached != null) {
-      _ownLinesFor = key;
-      _ownLines = cached;
-      return;
-    }
-    final persona = ref.read(companionPersonaProvider);
-    final name = ref.read(companionNameProvider) ?? _character.name;
-    final locale = context.l10n.localeName;
-    final apiKey = ref.read(settingsProvider).apiKey.trim();
-    if (apiKey.isEmpty) return;
-    final client = ref.read(companionLightClientProvider)();
-    try {
-      final written = await companionLinesWrite(
-        client: client,
-        apiKey: apiKey,
-        character: character,
-        fingerprint: fingerprint,
-        persona: companionPersonaPart(
-          custom: persona.custom,
-          name: name,
-          callMe: persona.callMe,
-          whale: companionIsWhale(_characterSourceKey, _character.name),
-        ),
-        language: locale.startsWith('zh') ? 'zh' : 'en',
-      );
-      if (mounted && written != null && _linesKey().key == key) {
-        _ownLinesFor = key;
-        _ownLines = written;
+    final written = await companionLinesForProfile(character, fingerprint, () async {
+      if (!mounted || _linesKey().key != key) return null;
+      final persona = ref.read(companionPersonaProvider);
+      final name = ref.read(companionNameProvider) ?? _character.name;
+      final locale = context.l10n.localeName;
+      final apiKey = ref.read(settingsProvider).apiKey.trim();
+      if (apiKey.isEmpty) return null;
+      final client = ref.read(companionLightClientProvider)();
+      try {
+        return await companionGenerateLines(
+          client: client,
+          apiKey: apiKey,
+          persona: companionPersonaPart(
+            custom: persona.custom,
+            name: name,
+            callMe: persona.callMe,
+            whale: companionIsWhale(_characterSourceKey, _character.name),
+          ),
+          language: locale.startsWith('zh') ? 'zh' : 'en',
+        );
+      } on Object {
+        return null; // The app's lines stand in until another change.
+      } finally {
+        client.close();
       }
-    } on Object {
-      // The app's lines stand in; the next change tries again.
-    } finally {
-      client.close();
+    });
+    if (mounted && written != null && _linesKey().key == key) {
+      _ownLinesFor = key;
+      _ownLines = written;
     }
   }
 

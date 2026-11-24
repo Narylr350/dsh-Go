@@ -1,10 +1,13 @@
 // Her own lines (from a pack), her marks kept out of the main chat, and a
 // call in her room ending each turn once.
 
+import 'dart:async';
+
 import 'package:dsh_app/companion/companion_call.dart';
 import 'package:dsh_app/companion/companion_lines.dart';
 import 'package:dsh_app/companion/companion_reply.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test('a pack brings lines for known moments only', () {
@@ -18,6 +21,36 @@ void main() {
     expect(lines['dance'], isNull);
     expect(CompanionLines.parse(null).isEmpty, isTrue);
   });
+
+  for (final newCached in [false, true]) {
+    test('late old model cannot displace current lines, already cached=$newCached', () async {
+      SharedPreferences.setMockInitialValues({});
+      final old = CompanionLines.parse({'pat': '先前的设定'});
+      final newer = CompanionLines.parse({'pat': '刚改的设定'});
+      if (newCached) await companionLinesForProfile('Ann', 'new', () async => newer);
+      final started = Completer<void>(), release = Completer<CompanionLines>();
+      final pending = companionLinesForProfile('Ann', 'old', () {
+        started.complete();
+        return release.future;
+      });
+      await started.future;
+      final other = await companionLinesForProfile('Bea', 'her own', () async => CompanionLines.parse({'pat': 'Bea'}));
+      expect(other?['pat'], ['Bea']);
+      var generated = 0;
+      final current = await companionLinesForProfile('Ann', 'new', () async {
+        generated++;
+        return newer;
+      });
+      expect(generated, newCached ? 0 : 1);
+      expect(current?['pat'], ['刚改的设定']);
+      release.complete(old);
+      expect(await pending, isNull);
+      SharedPreferences.resetStatic();
+      expect((await companionLinesCached('Ann', 'new'))?['pat'], ['刚改的设定']);
+      expect(await companionLinesCached('Ann', 'old'), isNull);
+      expect((await companionLinesCached('Bea', 'her own'))?['pat'], ['Bea']);
+    });
+  }
 
   test('her marks come out of the words, half- and full-width', () {
     const text = '【表情：歪头】嗯？[动作:点头] 好呀。';

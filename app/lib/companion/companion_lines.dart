@@ -75,25 +75,56 @@ Future<CompanionLines?> companionLinesCached(String character, String fingerprin
   }
 }
 
-Future<void> _cache(String character, String fingerprint, CompanionLines lines) async {
+class _LineRequests {
+  int active = 0;
+  String fingerprint = '';
+  Future<void> saving = Future.value();
+}
+
+final _lineRequests = <String, _LineRequests>{};
+
+/// Resolve this character's current profile. Each character has one cache
+/// slot. While overlapping reads or model requests are outstanding, only
+/// the most recently requested fingerprint can populate that slot.
+Future<CompanionLines?> companionLinesForProfile(
+  String character,
+  String fingerprint,
+  Future<CompanionLines?> Function() generate,
+) async {
+  final requests = _lineRequests.putIfAbsent(character, _LineRequests.new);
+  requests.active++;
+  requests.fingerprint = fingerprint;
+  bool wanted() => requests.fingerprint == fingerprint;
   try {
-    await (await SharedPreferences.getInstance()).setString(
-      '$_cachePrefix$character',
-      jsonEncode({'fingerprint': fingerprint, 'lines': lines.toJson()}),
-    );
-  } on Object {
-    // Written again next time.
+    final cached = await companionLinesCached(character, fingerprint);
+    if (!wanted()) return null;
+    if (cached != null) return cached;
+    final lines = await generate();
+    if (lines == null || !wanted()) return null;
+    requests.saving = requests.saving.then((_) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (wanted()) {
+          await prefs.setString(
+            '$_cachePrefix$character',
+            jsonEncode({'fingerprint': fingerprint, 'lines': lines.toJson()}),
+          );
+        }
+      } on Object {
+        // The current page can use the words even if storage is unavailable.
+      }
+    });
+    await requests.saving;
+    return wanted() ? lines : null;
+  } finally {
+    if (--requests.active == 0) _lineRequests.remove(character);
   }
 }
 
-/// Writes her lines in her own voice with the person's model (the light
-/// route), keeps them for [character], and returns them; null when the
-/// answer can't be used.
-Future<CompanionLines?> companionLinesWrite({
+/// Generate the words for an uncached profile.
+Future<CompanionLines?> companionGenerateLines({
   required http.Client client,
   required String apiKey,
-  required String character,
-  required String fingerprint,
   required String persona,
   required String language,
 }) async {
@@ -135,7 +166,5 @@ Future<CompanionLines?> companionLinesWrite({
     return null;
   }
   final lines = CompanionLines.parse(decoded);
-  if (lines.isEmpty) return null;
-  await _cache(character, fingerprint, lines);
-  return lines;
+  return lines.isEmpty ? null : lines;
 }
