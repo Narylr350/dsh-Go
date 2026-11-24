@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dsh_app/companion/companion_call.dart';
 
@@ -27,6 +26,7 @@ import 'package:dsh_app/ui/theme/app_icons.dart';
 import 'package:dsh_app/ui/theme/app_theme.dart';
 import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -575,6 +575,38 @@ void main() {
       }
     });
   }
+
+  testWidgets('the home widget keeps whole characters at its 80-unit reply boundary', (tester) async {
+    final room = _Room(root);
+    const channel = MethodChannel('dsh/companion_widget');
+    final received = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.arguments case {'line': final String line} when call.method == 'update') received.add(line);
+      return true;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    await room.open(tester);
+    try {
+      final lead = '甲' * 78;
+      final cases = [
+        ('$lead🐋', '$lead🐋'), // Exactly 80 UTF-16 units.
+        ('$lead🐋后', '$lead…'),
+        ('${lead}e\u0301后', '$lead…'),
+        ('$lead👩‍🔧后', '$lead…'),
+        ('${lead}ABC', '${lead}A…'),
+      ];
+      for (final (index, (reply, preview)) in cases.indexed) {
+        final prompt = '预览第${index + 1}句';
+        room.client.scriptedWords[prompt] = reply;
+        received.clear();
+        await room.say(tester, prompt);
+        expect(tester.widget<CompanionSpeech>(find.byType(CompanionSpeech)).text, reply);
+        expect(received.last, preview);
+      }
+    } finally {
+      await room.close(tester);
+    }
+  });
 
   testWidgets('Android assistant shares the page with exactly one full room request', (tester) async {
     final room = _Room(root);

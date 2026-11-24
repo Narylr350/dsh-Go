@@ -2273,7 +2273,8 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
         _showBubble(error, hold: const Duration(seconds: 6), error: true, clearTasks: false);
       } else if (reply.words.isNotEmpty) {
         if (!_replyClearedWidget) {
-          _widgetUpdate(line: reply.words.length > 80 ? '${reply.words.substring(0, 79)}…' : reply.words);
+          final words = reply.words;
+          _widgetUpdate(line: words.length > 80 ? '${CharacterRange.at(words, 79).stringBefore}…' : words);
         }
         _bubbleTimer?.cancel();
         _bubbleTimer = Timer(Duration(milliseconds: 9000 + reply.words.length * 60), () {
