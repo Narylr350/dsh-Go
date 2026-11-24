@@ -34,7 +34,9 @@ async function fixture(t) {
   const routes = createCompanionRoutes({ ctx, send: (res, status, data) => {
     res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data));
   } });
-  const server = http.createServer((req, res) => routes.handle(req, res, req.url));
+  const server = http.createServer(async (req, res) => {
+    if (!await routes.handle(req, res, req.url)) { res.writeHead(404); res.end(); }
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(async () => { await routes.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
@@ -64,7 +66,7 @@ async function fixture(t) {
   const event = (type, data) => handlers.get('session/event')(session, { type, data });
   const call = (name, callId = 't1', args = {}, exec = {}) => registered.get('companion_' + name)
     .execute(args, { agent, callId, signal: new AbortController().signal, ...exec });
-  return { post, open, claim, event, call, registered, services, agent };
+  return { post, open, claim, event, call, registered, services, agent, server, routes };
 }
 
 test('authenticated phone is ready before the prompt; only a claimed owner turn can call it', async t => {
@@ -176,4 +178,84 @@ test('a slow old resolver cannot replace a newer ready phone stream', async t =>
   assert.equal((await current.next()).callId, 'r1');
   await current.result({ callId: 'r1', content: 'right phone', isError: false });
   assert.equal(await pending, 'right phone');
+});
+
+test('three phone opens wait for the first fiber to finish disposing before mounting the third', async t => {
+  const f = await fixture(t);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), order = [];
+  const plugin = f.agent.ctx.plugin;
+  f.agent.ctx.plugin = definition => {
+    const fiber = plugin(definition);
+    order.push('mount');
+    if (order.length !== 1) return fiber;
+    return { ...fiber, async dispose() {
+      entered.resolve();
+      await release.promise;
+      await fiber.dispose();
+      order.push('released');
+    } };
+  };
+  const first = await f.open();
+  const second = f.post('open', { sessionId: 'cabin', requestId: 'second', tools: offered });
+  await entered.promise;
+  const third = f.open('third');
+  try {
+    assert.equal(await (await second).text(), '', 'the middle stream never becomes ready');
+  } finally { release.resolve(); }
+  const newest = await third;
+  assert.deepEqual(order, ['mount', 'released', 'mount']);
+  assert.equal(await first.next(), null);
+  await f.claim('third');
+  const pending = f.call('reminder', 'alarm');
+  assert.equal((await newest.next()).callId, 'alarm');
+  await newest.result({ callId: 'alarm', content: 'set once', isError: false });
+  assert.equal(await pending, 'set once');
+});
+
+test('unloading while an open body is still arriving never registers phone tools', async t => {
+  const f = await fixture(t);
+  const arriving = once(f.server, 'request');
+  const req = http.request({ host: '127.0.0.1', port: f.server.address().port, path: base + 'open',
+    method: 'POST', headers: { authorization: 'owner', 'content-type': 'application/json' } });
+  const response = once(req, 'response');
+  req.write('{"sessionId":"cabin",');
+  await arriving;
+  await f.routes.dispose();
+  req.end(JSON.stringify({ requestId: 'late', tools: offered }).slice(1));
+  const [res] = await response;
+  try {
+    assert.equal(res.statusCode, 409);
+    assert.equal(f.registered.size, 0);
+  } finally { res.destroy(); }
+});
+
+test('an already unloaded bridge never mounts its first phone route', async t => {
+  const f = await fixture(t);
+  await f.routes.dispose();
+  const res = await f.post('open', { sessionId: 'cabin', requestId: 'late', tools: offered });
+  try {
+    assert.equal(res.status, 404);
+    assert.equal(f.registered.size, 0);
+  } finally { await res.body.cancel(); }
+});
+
+test('route disposal waits for tool release already started by turn end', async t => {
+  const f = await fixture(t);
+  const release = Promise.withResolvers();
+  const plugin = f.agent.ctx.plugin;
+  f.agent.ctx.plugin = definition => {
+    const fiber = plugin(definition);
+    return { ...fiber, dispose: () => release.promise.then(() => fiber.dispose()) };
+  };
+  await f.open();
+  await f.claim();
+  const ending = f.event('turn/end', { turn: 1 });
+  let unloaded = false;
+  const unloading = f.routes.dispose().then(() => { unloaded = true; });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(unloaded, false, 'unload must drain the previously retired fiber');
+  } finally { release.resolve(); }
+  await Promise.all([ending, unloading]);
+  assert.equal(f.registered.size, 0);
 });

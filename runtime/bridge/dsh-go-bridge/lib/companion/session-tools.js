@@ -15,19 +15,22 @@ const unavailable = message => new CompanionError(409, 'device-unavailable', mes
 const isMap = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const asFrame = frame => JSON.stringify(frame) + '\n';
 
-export function createSessionToolRoutes({ ctx, readJson, send }) {
+export function createSessionToolRoutes({ ctx, readJson, send, closed }) {
   const channels = new Map();
   const claimed = new WeakMap();
   const resolving = new Map();
 
   function retire(channel) {
-    if (channel.closed) return;
+    if (channel.closed) return channel.disposing;
     channel.closed = true;
-    if (channels.get(channel.agent.id) === channel) channels.delete(channel.agent.id);
     for (const pending of channel.calls.values()) pending.reject(unavailable('手机结果未知；请勿自动重复操作'));
     channel.calls.clear();
     channel.res.end();
-    if (channel.fiber) return channel.fiber.dispose();
+    // A channel can itself be waiting for its predecessor to release the tool names.
+    channel.disposing = Promise.resolve(channel.fiber ? channel.fiber.dispose() : channel.disposing).finally(() => {
+      if (channels.get(channel.agent.id) === channel) channels.delete(channel.agent.id);
+    });
+    return channel.disposing;
   }
 
   function live(channel) {
@@ -64,6 +67,7 @@ export function createSessionToolRoutes({ ctx, readJson, send }) {
   }
 
   async function open(body, res) {
+    if (closed()) throw unavailable('手机工具路由已关闭');
     const { sessionId, requestId, tools } = body;
     if (!contextId(sessionId) || !contextId(requestId) || !Array.isArray(tools)) throw invalid();
     const names = new Set();
@@ -92,12 +96,12 @@ export function createSessionToolRoutes({ ctx, readJson, send }) {
     const previous = channels.get(sessionId);
     // A lost HTTP response does not bestow a second device owner. In
     // particular it must never reset seen callIds or a web-derived restriction.
-    if (previous?.requestId === requestId || claimed.get(agent)?.requestId === requestId) {
+    if ((previous && !previous.closed && previous.requestId === requestId) || claimed.get(agent)?.requestId === requestId) {
       throw new CompanionError(409, 'device-request-in-use', '这条消息已在原会话处理中');
     }
     const closing = previous && retire(previous);
     const channel = { agent, requestId, res, token: randomUUID(), calls: new Map(), seen: new Set(),
-      closed: false, externalWeb: false };
+      closed: false, externalWeb: false, disposing: closing };
     channels.set(sessionId, channel);
     const onClose = () => { Promise.resolve(retire(channel)).catch(error => ctx.logger?.warn?.(error)); };
     res.once('close', onClose);

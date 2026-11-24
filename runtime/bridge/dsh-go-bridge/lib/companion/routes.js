@@ -77,6 +77,7 @@ function readJson(req, maxBytes = MAX_BODY_BYTES, strictKeys = false) {
 export function createCompanionRoutes({ send, store = createCompanionStore(), signals, ctx, promptContext,
   recall = createRecallCoordinator({ store, promptContext }) }) {
   let tasks, sessionTools;
+  let phoneToolsClosed = false;
   const auxiliary = createCompanionAuxiliaryRoutes({ ctx, send, readJson });
   const lookup = createCompanionLookupRoutes({ ctx, send, readJson, resolve: auxiliary.resolve });
   function usageRoute(req) {
@@ -207,7 +208,8 @@ export function createCompanionRoutes({ send, store = createCompanionStore(), si
         }
       }
       if (path.startsWith(ROOT + '/session-tools/')) {
-        sessionTools ??= createSessionToolRoutes({ ctx, readJson, send });
+        if (phoneToolsClosed) return false;
+        sessionTools ??= createSessionToolRoutes({ ctx, readJson, send, closed: () => phoneToolsClosed });
         if (await sessionTools.handle(req, res, path)) return true;
       }
       if (await auxiliary.handle(req, res, path)) return true;
@@ -263,6 +265,10 @@ export function createCompanionRoutes({ send, store = createCompanionStore(), si
       }
       return true;
     },
-    dispose() { lookup.dispose(); auxiliary.dispose(); return sessionTools?.dispose(); },
+    dispose() {
+      phoneToolsClosed = true;
+      lookup.dispose(); auxiliary.dispose();
+      return sessionTools?.dispose();
+    },
   };
 }
