@@ -137,26 +137,9 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
         sources.addAll(batch.sources);
         // The prior reply is optional context, never an invented question.
         // Its whole body and actual display ticket must fit the same request.
-        for (final user in batch.sources) {
-          if (user['character_id'] == null) continue;
-          final prior = _db.select(
-            '''
-            SELECT m.* FROM memory_affinity_presentations p JOIN memory_messages m ON m.id=p.assistant_source_id
-            WHERE p.character_id=? AND m.character_id=? AND m.session_id=?
-              AND m.scope='real' AND m.role='assistant' AND m.first_seq>? AND m.first_seq<?
-              AND p.presented_at_ms<=? ORDER BY m.first_seq DESC LIMIT 1
-          ''',
-            [
-              user['character_id'],
-              user['character_id'],
-              user['session_id'],
-              meta['history_after_seq'],
-              user['first_seq'],
-              user['said_at_utc'],
-            ],
-          );
-          if (prior.isEmpty || sources.any((source) => source['id'] == prior.single['id'])) continue;
-          final candidate = [...sources, Map<String, Object?>.from(prior.single)]
+        for (final prior in _priorPresentedReplies(batch.sources, meta['history_after_seq'] as int)) {
+          if (sources.any((source) => source['id'] == prior['id'])) continue;
+          final candidate = [...sources, prior]
             ..sort((a, b) => (a['first_seq'] as int).compareTo(b['first_seq'] as int));
           if (size(candidate) <= memoryBatchInputTokens) {
             sources
@@ -380,6 +363,56 @@ extension CompanionMemoryMaintenanceStore on CompanionMemoryStore {
       );
       return _agentClaimView(_agentClaim(id));
     });
+  }
+
+  Iterable<MemoryRow> _priorPresentedReplies(List<MemoryRow> sources, int cutoff) sync* {
+    final users = sources.where((source) => source['character_id'] != null).toList();
+    if (users.isEmpty) return;
+    // Probe no more tickets than the number of lookups this batch would make,
+    // plus one to distinguish a complete small table from a dense history.
+    final ticketCount = _db.select('SELECT 1 FROM memory_affinity_presentations LIMIT ?', [users.length + 1]).length;
+    if (ticketCount == 0) return;
+    if (ticketCount <= users.length) {
+      // The surrounding transaction holds this same, bounded ticket table.
+      final sample = _db.select('''
+        SELECT p.character_id,p.presented_at_ms,m.id,m.session_id,m.first_seq
+          FROM memory_affinity_presentations p CROSS JOIN memory_messages m ON m.id=p.assistant_source_id
+          WHERE m.character_id=p.character_id AND m.scope='real' AND m.role='assistant' AND m.first_seq>?
+      ''', [cutoff]);
+      MemoryRow? reply; // At most one body may be held outside the selected context.
+      for (final user in users) {
+        Row? best;
+        for (final ticket in sample) {
+          if (ticket['character_id'] != user['character_id'] ||
+              ticket['session_id'] != user['session_id'] ||
+              (ticket['presented_at_ms'] as int) > (user['said_at_utc'] as int) ||
+              (ticket['first_seq'] as int) >= (user['first_seq'] as int)) {
+            continue;
+          }
+          if (best == null || (ticket['first_seq'] as int) > (best['first_seq'] as int)) best = ticket;
+        }
+        if (best != null) {
+          final id = best['id'] as String;
+          if (reply == null || reply['id'] != id) {
+            reply = Map<String, Object?>.from(_db.select('SELECT * FROM memory_messages WHERE id=?', [id]).single);
+          }
+          yield reply;
+        }
+      }
+      return;
+    }
+    // A dense store keeps the existing indexed, newest-first lookup.
+    for (final user in users) {
+      final prior = _db.select('''
+        SELECT m.* FROM memory_affinity_presentations p JOIN memory_messages m ON m.id=p.assistant_source_id
+        WHERE p.character_id=? AND m.character_id=? AND m.session_id=?
+          AND m.scope='real' AND m.role='assistant' AND m.first_seq>? AND m.first_seq<?
+          AND p.presented_at_ms<=? ORDER BY m.first_seq DESC LIMIT 1
+      ''', [
+        user['character_id'], user['character_id'], user['session_id'], cutoff, user['first_seq'], user['said_at_utc'],
+      ]);
+      if (prior.isNotEmpty) yield Map<String, Object?>.from(prior.single);
+    }
   }
 
   int _agentContextTokens(

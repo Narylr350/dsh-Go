@@ -8,14 +8,18 @@ import 'package:test/test.dart';
 import 'support/old_memory_schema.dart';
 
 /// Count hydrated card rows without substituting SQLite queries or results.
-class _CardReadCounter implements Database {
-  _CardReadCounter(this.database);
+class _MemoryReadCounter implements Database {
+  _MemoryReadCounter(this.database);
   final Database database;
   int cardRows = 0;
+  int singlePriorLookups = 0;
 
   @override
   ResultSet select(String sql, [List<Object?> parameters = const []]) {
     final rows = database.select(sql, parameters);
+    if (sql.contains('memory_affinity_presentations p') && sql.contains('ORDER BY m.first_seq DESC LIMIT 1')) {
+      singlePriorLookups++;
+    }
     if (rows.columnNames.contains('topic_mode') && rows.columnNames.contains('collection')) cardRows += rows.length;
     return rows;
   }
@@ -2968,9 +2972,55 @@ void main() {
     );
   });
 
+  for (final dense in [false, true]) {
+    test('extract preserves prior displayed replies in a ${dense ? 'dense' : 'sparse'} archive', () {
+      store.close();
+      final reads = _MemoryReadCounter(sqlite3.open('${directory.path}/memory.sqlite'));
+      database = reads;
+      store = CompanionMemoryStore(database, nowMilliseconds: () => now, createId: id);
+      final a = character('prior:a'), b = character('prior:b');
+      const baseTime = 1800000000000;
+      now += 10000;
+      void show(String message, String role, String session, int at, {bool visible = true}) {
+        store.submitMessage(id: message, role: 'assistant', characterId: role, sessionId: session,
+            text: message, saidAtUtc: at, offsetMinutes: 0);
+        if (visible) {
+          store.recordCompanionPresentation(characterId: role, presentationId: 'shown-$message',
+              kind: 'assistant', presentedAtMs: at, assistantSourceId: message);
+        }
+      }
+      if (dense) {
+        for (var i = 0; i < 12; i++) {
+          show('other-$i', b, 'elsewhere', baseTime);
+        }
+      }
+      // Both qualify by time; storage order chooses early, even though older was displayed later.
+      show('older', a, 'room', baseTime + 300);
+      show('early', a, 'room', baseTime + 100);
+      show('later', a, 'room', baseTime + 800);
+      show('undisplayed', a, 'room', baseTime + 200, visible: false);
+      show('other-session', a, 'other', baseTime + 200);
+      show('other-role', b, 'room', baseTime + 200);
+      for (var i = 0; i < 8; i++) {
+        store.submitMessage(id: 'user-$i', characterId: a, sessionId: 'room', text: '回答 $i',
+            saidAtUtc: baseTime + 400, offsetMinutes: 0);
+      }
+      // Its wall clock is early enough, but this source was appended after those users.
+      show('wrong-order', a, 'room', baseTime + 200);
+      final claim = store.nextAgentMaintenance(kind: 'extract', offsetMinutes: 0, forceTail: true,
+          estimateTokens: (_) => 8, estimateContextTokens: (_) => 100)!;
+      final turn = store.beginAgentMaintenance(kind: 'extract', claimId: claim['id'] as String, characterId: a);
+      final assistants = (turn['sources'] as List<MemoryRow>).where((row) => row['role'] == 'assistant');
+      expect(assistants.map((row) => row['id']), ['early']);
+      expect((turn['presentations'] as List<MemoryRow>).map((row) => row['id']), ['shown-early']);
+      if (!dense) expect(reads.singlePriorLookups, lessThanOrEqualTo(1));
+      store.finishAgentMaintenance(turnId: turn['id'] as String, complete: true);
+    });
+  }
+
   test('extract prices all candidates without rehydrating the full role domain per card', () {
     store.close();
-    final reads = _CardReadCounter(sqlite3.open('${directory.path}/memory.sqlite'));
+    final reads = _MemoryReadCounter(sqlite3.open('${directory.path}/memory.sqlite'));
     database = reads;
     store = CompanionMemoryStore(database, nowMilliseconds: () => now, createId: id);
     final role = character('scope:prices');
