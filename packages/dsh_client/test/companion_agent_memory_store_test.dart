@@ -1700,6 +1700,94 @@ void main() {
     expect(store.followups(), isEmpty);
   });
 
+  group('confirmed followup relationship receipt', () {
+    late String role, otherRole;
+    setUp(() {
+      role = character('local:original');
+      otherRole = character('local:other');
+      store.initializeInitiative({
+        'v': 2,
+        'lastGreetingAtMs': null,
+        'inviteAtMs': [],
+        'signalAtMs': [],
+        'declinedUntilMs': 0,
+        'night': null,
+      });
+    });
+
+    String reserve({bool legacySource = false}) {
+      final card = seed('修琴进展');
+      final source = legacySource ? say('source', '可以问问进展。') : sayAs('source', '可以问问进展。', role);
+      final turn = begin(source, [card]);
+      final scheduled = call(turn, 'later', 'ask_later', {'card': card['id'], 'whenMs': now});
+      expect(scheduled.applied, isTrue);
+      store.closeAgentTurn(turn);
+      final chosen = store.nextAgentFollowup(nowMs: now, characterId: legacySource ? null : role)!;
+      return store.reserveInitiative(
+        kind: 'followup',
+        nowMs: now,
+        maxPerDay: 2,
+        gapMs: 0,
+        followupId: chosen['id']! as String,
+      )!;
+    }
+
+    test('shown and its captured role roll back or commit together', () {
+      final spend = reserve();
+      final id = store.followups().single['id'];
+      database.execute(
+        "CREATE TRIGGER fail_display BEFORE INSERT ON memory_affinity_presentations "
+        "BEGIN SELECT RAISE(ABORT,'fixture'); END",
+      );
+      expect(
+        () => store.settleInitiative(spend, outcome: 'shown', followupCharacterId: role),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(store.followups().single['state'], 'reserved');
+      expect(database.select('SELECT state FROM memory_initiative_spends').single['state'], 'reserved');
+      expect(database.select('SELECT id FROM memory_affinity_presentations'), isEmpty);
+      database.execute('DROP TRIGGER fail_display');
+      store.settleInitiative(spend, outcome: 'shown', followupCharacterId: role);
+      store.settleInitiative(spend, outcome: 'shown', followupCharacterId: otherRole);
+      reopen();
+      expect(store.followups().single['state'], 'asked');
+      expect(store.nextAgentFollowup(nowMs: now, characterId: role), isNull);
+      final shown = database.select('SELECT * FROM memory_affinity_presentations').single;
+      expect(shown['id'], 'followup:$id');
+      expect(shown['character_id'], role);
+      expect(shown['opportunity_id'], id);
+      expect(shown['presented_at_ms'], store.followups().single['presented_at_ms']);
+    });
+
+    for (final mode in ['unknown', 'released', 'legacy', 'deleted', 'other role']) {
+      test('$mode does not create a role presentation', () {
+        final spend = reserve(legacySource: mode == 'legacy');
+        if (mode == 'deleted') store.deleteMessage(id: 'source', expectedSourceRev: 1);
+        final outcome = ['unknown', 'released'].contains(mode) ? mode : 'shown';
+        store.settleInitiative(
+          spend,
+          outcome: outcome,
+          followupCharacterId: mode == 'legacy' ? null : (mode == 'other role' ? otherRole : role),
+        );
+        reopen();
+        expect(database.select('SELECT state FROM memory_initiative_spends').single['state'], outcome);
+        expect(database.select('SELECT id FROM memory_affinity_presentations'), isEmpty);
+        final expected = {
+          'unknown': 'maybe_shown',
+          'released': 'pending',
+          'legacy': 'asked',
+          'other role': 'asked',
+        }[mode];
+        if (expected == null) {
+          expect(store.followups(), isEmpty);
+        } else {
+          expect(store.followups().single['state'], expected);
+        }
+        expect(store.initiativeRecord()!['signalAtMs'], outcome == 'released' ? isEmpty : [now]);
+      });
+    }
+  });
+
   test('quiet and cancel retire actual pending followups without changing an unrelated card', () {
     final first = seed('项目进度');
     final other = seed('喜欢喝茶');

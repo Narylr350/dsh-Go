@@ -2845,10 +2845,15 @@ void main() {
           // observation using the existing clock seam, without a wall-time sleep.
           wall += 46000;
           mono += 46000;
+          // Observe the first continuation of the real display callback, before
+          // another microtask could fill a gap between the two durable facts.
+          final receipt = room.presented.future.then((_) => visit.database.select(
+            'SELECT p.character_id FROM memory_followups f JOIN memory_affinity_presentations p '
+            "ON p.opportunity_id=f.id WHERE f.id=? AND f.state='asked' AND p.presented_at_ms=f.presented_at_ms",
+            [opportunity],
+          ));
           visit.attachment.observe(room.initiativeView);
-          await room.presented.future.timeout(const Duration(seconds: 5));
-          // Visit deliberately records only after synchronous shown settlement.
-          await Future<void>.microtask(() {});
+          expect((await receipt.timeout(const Duration(seconds: 5))).single['character_id'], role);
           final shown = store.followups().singleWhere((row) => row['id'] == opportunity);
           expect(shown['state'], 'asked');
           expect(shown['presented_at_ms'], wall);

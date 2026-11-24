@@ -212,23 +212,41 @@ extension CompanionAffinityStore on CompanionMemoryStore {
       }
     } else if (kind == 'followup') {
       if (opportunityId == null || assistantSourceId != null) throw ArgumentError('Invalid followup presentation');
-      if (_db
-          .select(
-            '''
-        SELECT 1 FROM memory_followups f JOIN memory_initiative_spends s ON s.opportunity_id=f.id
-          JOIN memory_cards c ON c.id=f.card_id JOIN memory_messages m ON m.id=f.message_id
-        WHERE f.id=? AND f.state='asked' AND s.state='shown' AND s.presented_at_ms<=?
-          AND (c.character_id IS NULL OR c.character_id=?)
-          AND (m.character_id IS NULL OR m.character_id=?)
-      ''',
-            [opportunityId, presentedAtMs, characterId, characterId],
-          )
-          .isEmpty) {
-        throw _conflict;
-      }
+      if (!_shownFollowupForCharacter(opportunityId, presentedAtMs, characterId)) throw _conflict;
     } else {
       throw ArgumentError.value(kind, 'kind');
     }
+    _writeCompanionPresentation(
+      characterId: characterId,
+      presentationId: presentationId,
+      kind: kind,
+      presentedAtMs: presentedAtMs,
+      assistantSourceId: assistantSourceId,
+      opportunityId: opportunityId,
+    );
+  });
+
+  bool _shownFollowupForCharacter(String opportunityId, int presentedAtMs, String characterId) => _db
+      .select(
+        '''
+          SELECT 1 FROM memory_followups f JOIN memory_initiative_spends s ON s.opportunity_id=f.id
+            JOIN memory_cards c ON c.id=f.card_id JOIN memory_messages m ON m.id=f.message_id
+          WHERE f.id=? AND f.state='asked' AND s.state='shown' AND s.presented_at_ms<=?
+            AND (c.character_id IS NULL OR c.character_id=?)
+            AND (m.character_id IS NULL OR m.character_id=?)
+        ''',
+        [opportunityId, presentedAtMs, characterId, characterId],
+      )
+      .isNotEmpty;
+
+  void _writeCompanionPresentation({
+    required String characterId,
+    required String presentationId,
+    required String kind,
+    required int presentedAtMs,
+    String? assistantSourceId,
+    String? opportunityId,
+  }) {
     final existing = _db.select('SELECT * FROM memory_affinity_presentations WHERE id=?', [presentationId]);
     if (existing.isNotEmpty) {
       final row = existing.single;
@@ -248,7 +266,7 @@ extension CompanionAffinityStore on CompanionMemoryStore {
     ''',
       [presentationId, characterId, kind, assistantSourceId, opportunityId, presentedAtMs],
     );
-  });
+  }
 
   /// Installation-wide legacy binding: phone once plus one chosen Host store.
   /// The old sources contribute a maximum baseline, never a sum or old visits.

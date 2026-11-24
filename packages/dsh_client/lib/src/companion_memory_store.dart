@@ -3161,7 +3161,7 @@ class CompanionMemoryStore {
 
   /// Rendering is outside the transaction. Only a real successful callback
   /// supplies shown; a throwing/unknown callback keeps its conservative debit.
-  void settleInitiative(String id, {required String outcome}) => _transaction(() {
+  void settleInitiative(String id, {required String outcome, String? followupCharacterId}) => _transaction(() {
     if (!const ['shown', 'released', 'unknown'].contains(outcome)) throw ArgumentError('Invalid initiative outcome');
     final rows = _db.select('SELECT * FROM memory_initiative_spends WHERE id=?', [id]);
     if (rows.isEmpty) throw _conflict;
@@ -3170,7 +3170,8 @@ class CompanionMemoryStore {
     if (spend['state'] != 'reserved') throw _conflict;
     final at = outcome == 'shown' ? _checkedNow() : null;
     _db.execute('UPDATE memory_initiative_spends SET state=?,presented_at_ms=? WHERE id=?', [outcome, at, id]);
-    if (spend['opportunity_id'] != null) {
+    final opportunityId = spend['opportunity_id'] as String?;
+    if (opportunityId != null) {
       final state = outcome == 'shown'
           ? 'asked'
           : outcome == 'unknown'
@@ -3186,10 +3187,23 @@ class CompanionMemoryStore {
           at,
           outcome == 'unknown' ? 'presentation_unknown' : null,
           outcome == 'shown' ? 0 : 1,
-          spend['opportunity_id'],
+          opportunityId,
           outcome == 'released' ? 0 : 1,
         ],
       );
+      // A confirmed display and its role receipt share one commit. A source
+      // deleted during an in-flight delivery can still consume its shown slot.
+      if (at != null &&
+          followupCharacterId != null &&
+          _shownFollowupForCharacter(opportunityId, at, followupCharacterId)) {
+        _writeCompanionPresentation(
+          characterId: followupCharacterId,
+          presentationId: 'followup:$opportunityId',
+          kind: 'followup',
+          presentedAtMs: at,
+          opportunityId: opportunityId,
+        );
+      }
     }
   });
 

@@ -1397,34 +1397,16 @@ class _CompanionAgentVisit {
         candidate.contextKey == target.initiativeView.contextKey &&
         owner.store.isAgentFollowupCurrent(captured, nowMs: clock().wallMs, characterId: role);
     String? line;
-    String? notificationTicket;
     final notify = switch (target) {
       final CompanionAgentNotificationUi notify => notify,
       _ => null,
     };
-    void recordPresented() {
-      if (role == null) return;
-      try {
-        final shown = owner.store.followups().singleWhere((row) => row['id'] == captured['id']);
-        if (shown['state'] != 'asked' || shown['presented_at_ms'] is! int) return;
-        owner.store.recordCompanionPresentation(
-          characterId: role,
-          // UI ticket counters restart; the shown opportunity is durable.
-          presentationId: 'followup:${captured['id']}',
-          kind: 'followup',
-          presentedAtMs: shown['presented_at_ms']! as int,
-          opportunityId: captured['id']! as String,
-        );
-      } on Object {
-        /* No shown receipt means no presentation fact. */
-      }
-    }
-
     initiative.requestSignal(
       target.initiativeRoom,
       view,
       candidate,
       followupId: captured['id']! as String,
+      followupCharacterId: role,
       isCurrent: current,
       prepare: () async {
         // A failed preparation is skipped for this opportunity, not marked
@@ -1455,33 +1437,14 @@ class _CompanionAgentVisit {
         );
         return line != null;
       },
-      present: (display) {
-        if (!current() || line == null || !target.presentFollowup(display, line!)) return false;
-        if (role != null) {
-          // The initiative owner settles its real shown receipt synchronously
-          // after this callback. Record only after that settlement, while the
-          // original phone database is still retained.
-          final receipt = Future<void>.microtask(() {
-            recordPresented();
-          });
-          owner.retainReceipt(receipt);
-        }
-        return true;
-      },
+      present: (display) => current() && line != null && target.presentFollowup(display, line!),
       deliver: notify == null
           ? null
           : (display) async {
               if (!current() || line == null) return false;
-              notificationTicket = display.ticket.id;
               return notify.deliverFollowup(id: 'followup:${captured['id']}', text: line!);
             },
-      retainDelivery: (future) {
-        owner.retainReceipt(
-          future.then((_) {
-            if (notificationTicket != null) recordPresented();
-          }),
-        );
-      },
+      retainDelivery: owner.retainReceipt,
       hide: target.hideFollowup,
     );
   }

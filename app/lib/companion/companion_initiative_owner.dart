@@ -117,6 +117,7 @@ class _SignalRequest {
     this.present,
     this.hide,
     this.followupId,
+    this.followupCharacterId,
     this.prepare,
     this.cancelPrepare,
     this.deliver,
@@ -131,6 +132,7 @@ class _SignalRequest {
   final bool Function(CompanionInitiativeDisplay) present;
   final void Function(String) hide;
   final String? followupId;
+  final String? followupCharacterId;
   final Future<bool> Function()? prepare;
   final void Function()? cancelPrepare;
   final Future<bool> Function(CompanionInitiativeDisplay)? deliver;
@@ -336,6 +338,7 @@ class CompanionInitiative {
     required void Function(String) hide,
     bool nightCareEnabled = false,
     String? followupId,
+    String? followupCharacterId,
     Future<bool> Function()? prepare,
     void Function()? cancelPrepare,
     Future<bool> Function(CompanionInitiativeDisplay)? deliver,
@@ -363,6 +366,7 @@ class CompanionInitiative {
       present,
       hide,
       followupId,
+      followupCharacterId,
       prepare,
       cancelPrepare,
       deliver,
@@ -579,6 +583,7 @@ class CompanionInitiative {
       if (reservation != null) {
         _store!.settleInitiative(
           reservation,
+          followupCharacterId: request?.followupCharacterId,
           outcome: shown
               ? 'shown'
               : unknown
@@ -645,6 +650,7 @@ class CompanionInitiative {
       if (reservation != null) {
         _store!.settleInitiative(
           reservation,
+          followupCharacterId: request.followupCharacterId,
           outcome: shown
               ? 'shown'
               : unknown
