@@ -456,6 +456,62 @@ void main() {
     root.deleteSync(recursive: true);
   });
 
+  testWidgets('a covered edit and the room draft survive a temporary system assistant room', (tester) async {
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var usedSupportDirectory = false;
+    messenger.setMockMethodCallHandler(paths, (call) async {
+      if (call.method != 'getApplicationSupportDirectory') return null;
+      usedSupportDirectory = true;
+      return root.path;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(paths, null));
+    final room = _Room(Directory('${root.path}/companion'));
+    await room.open(tester);
+    final here = tester.element(find.byType(CompanionPage));
+    final nav = Navigator.of(here);
+    final draft = tester.widget<TextField>(find.byType(TextField)).controller!;
+    const raw = '把这段草稿发到她的会话。';
+    const edited = '还没有提交的编辑';
+    final edit = TextEditingController();
+    try {
+      await tester.enterText(find.byType(TextField), raw);
+      unawaited(showDialog<void>(
+        context: here,
+        builder: (_) => AlertDialog(content: TextField(key: const Key('covered-edit'), controller: edit)),
+      ));
+      await room.settle(tester);
+      await tester.enterText(find.byKey(const Key('covered-edit')), edited);
+      final visit = openCompanionAssistant(here, here as WidgetRef, const CompanionAssistantEntry());
+      await room.settle(tester);
+      expect(find.byType(CompanionPage, skipOffstage: false), findsNWidgets(2));
+      expect(tester.widget<CompanionPage>(find.byType(CompanionPage)).assistantEntry, isNotNull);
+      expect(usedSupportDirectory, isTrue);
+      nav.pop();
+      await room.settle(tester);
+      await visit;
+      expect(find.byKey(const Key('covered-edit')), findsOneWidget);
+      expect(edit.text, edited);
+      expect(room.client.prompts, isEmpty);
+      nav.pop();
+      await room.settle(tester);
+      await room.pumpCallUntil(tester, () => find.byType(CompanionComposer).evaluate().isNotEmpty);
+      expect(tester.widget<TextField>(find.byType(TextField)).controller, same(draft));
+      expect(draft.text, raw);
+      final send = find.descendant(of: find.byType(CompanionComposer), matching: find.byIcon(AppIcons.send)).hitTestable();
+      expect(send, findsOneWidget);
+      await tester.tap(send);
+      await room.pumpCallUntil(tester, () => room.client.prompts.isNotEmpty);
+      expect(room.client.prompts.map((prompt) => prompt.text), [raw]);
+      expect(room.memory.store.messages().where((row) => row['role'] == 'user').map((row) => row['text']), [raw]);
+    } finally {
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+      await room.close(tester);
+      edit.dispose();
+    }
+  });
+
   for (final mode in ['light', 'full']) {
     testWidgets('$mode room uses the active pack while the old role preference write is pending', (tester) async {
       const bea = 'local:BBBBBBBBBBBBBBBBBBBBBBBB';

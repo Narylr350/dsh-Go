@@ -207,11 +207,12 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   bool _showHomeHint = false;
   bool _homeHintDone = true;
 
-  // The process Agent owns conversation and receipts. This window retains its
-  // original attachment, including while a newer room is already present.
+  // A covered room keeps its retired handle until it is visible again.
   late final CompanionAgent _agent;
   late final Future<Directory> _packRoot;
-  late final CompanionAgentAttachment _attachment;
+  late CompanionAgentAttachment _attachment;
+  bool _restoringWindow = false;
+  int? _retiredPackRevision;
   int _bindingEpoch = 0;
   late bool _boundLight;
   String? get _sessionId => ref.read(companionSessionsProvider.notifier).ofCharacter(ref.read(activeHostProvider), _characterSourceKey)?.sessionId;
@@ -486,13 +487,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _packRoot = widget.storeOverride != null
         ? Future.value(widget.storeOverride!.root)
         : getApplicationSupportDirectory().then((directory) => Directory('${directory.path}/companion'));
-    _attachment = _agent.attach(
-      root: _packRoot,
-      character: _character,
-      moves: _moves,
-      ui: this,
-      mapHandoff: _mapHandoff,
-    );
+    _attachment = _attachWindow(_character);
     _agent.addListener(_onAgentChanged);
     if (_attachment.replyId != null) _onAgentChanged();
     ref.listenManual(companionEffectiveVoiceProvider, (_, settings) {
@@ -547,14 +542,49 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     unawaited(_voice.start());
   }
 
-  Future<void> _prepare() async {
+  CompanionAgentAttachment _attachWindow(CompanionCharacter character) =>
+      _agent.attach(root: _packRoot, character: character, moves: _moves, ui: this, mapHandoff: _mapHandoff);
+
+  bool get _canRestoreWindow =>
+      mounted &&
+      !_leaving &&
+      !_attachment.isAttached &&
+      identical(_rooms.lastOrNull, this) &&
+      (ModalRoute.isCurrentOf(context) ?? true) &&
+      TickerMode.valuesOf(context).enabled;
+
+  void _restoreWindowAfterFrame() {
+    if (!mounted || _leaving || _attachment.isAttached || _restoringWindow) return;
+    _restoringWindow = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (_canRestoreWindow) await _prepare(restoreWindow: true);
+      } finally {
+        _restoringWindow = false;
+      }
+    });
+  }
+
+  Future<void> _prepare({bool restoreWindow = false}) async {
+    final original = _attachment;
     final store = widget.storeOverride ?? CompanionPackStore(await _packRoot);
-    final installed = await store.installed();
-    final identity = await store.characterIdentity();
     final bundled = await _hasBundled();
     final removed = (await SharedPreferences.getInstance()).getBool(_packRemovedKey) ?? false;
-    if (!mounted || !_attachment.isAttached) return;
+    final identity = await store.roomIdentity();
+    final installed = identity.installed;
+    if (!mounted) return;
+    if (restoreWindow) {
+      if (!_canRestoreWindow) return;
+      _attachment = _attachWindow(identity.character);
+      _voice.addListener(_voiceChanged);
+    } else if (!original.isAttached) {
+      return;
+    }
     setState(() {
+      if (restoreWindow && _retiredPackRevision != store.activeRevision) {
+        _stageRun++;
+        _stageReady = false;
+      }
       _store = store;
       _setCharacter(identity.character, identity.key);
       _bundledHere = bundled;
@@ -562,6 +592,13 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     });
     _attachment.updateCharacter(_character, _moves, sourceKey: _characterSourceKey);
     unawaited(_prepareMemory());
+    if (restoreWindow) {
+      if (ref.read(companionEffectiveVoiceProvider) case final settings?) {
+        unawaited(_prepareVoice(settings));
+      }
+      if (installed && _stageReady) unawaited(_arrive(greet: false));
+      _onAgentChanged();
+    }
     // The first time, the pack inside the app is unpacked while she swims over.
     // After the person removed it, it waits on the setup screen to be asked for.
     if (!installed && bundled && !removed) await _installBundled(arriving: true);
@@ -581,6 +618,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   @override
   void dispose() {
     _rooms.remove(this);
+    _rooms.lastOrNull?._restoreWindowAfterFrame();
     _mapHandoff.close();
     // Leaving her: no invitation follows, and nothing comes back to this page.
     _leaving = true;
@@ -608,46 +646,50 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   }
 
   Future<void> _openMemories() async {
+    final attachment = _attachment;
     try {
-      final memory = await _openMemory();
-      if (!mounted || !_attachment.isAttached) return;
-      final characterId = _attachment.characterId;
+      final memory = await attachment.openMemory();
+      if (!mounted || !attachment.isAttached) return;
+      final characterId = attachment.characterId;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => CompanionMemoryPage(memory: memory, characterId: characterId),
         ),
       );
     } on Object {
-      if (mounted && _attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
+      if (mounted && attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
     }
   }
 
   Future<void> _openTasks() async {
+    final attachment = _attachment;
     try {
-      final memory = await _openMemory();
-      if (!mounted || !_attachment.isAttached) return;
+      final memory = await attachment.openMemory();
+      if (!mounted || !attachment.isAttached) return;
       await Navigator.of(context)
           .push(MaterialPageRoute<void>(builder: (_) => CompanionTasksPage(memory: memory, allSessions: true)));
     } on Object {
-      if (mounted && _attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
+      if (mounted && attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
     }
   }
 
   Future<void> _openMemorySearch() async {
+    final attachment = _attachment;
     try {
-      final memory = await _openMemory();
-      if (!mounted || !_attachment.isAttached) return;
+      final memory = await attachment.openMemory();
+      if (!mounted || !attachment.isAttached) return;
       await showCompanionMemoryModelDialog(context, memory.embeddings);
     } on Object {
-      if (mounted && _attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
+      if (mounted && attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
     }
   }
 
   Future<void> _prepareMemory() async {
+    final attachment = _attachment;
     try {
-      await _openMemory();
+      await attachment.openMemory();
     } on Object {
-      if (mounted && _attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
+      if (mounted && attachment.isAttached) _notice(context.l10n.companionMemoryLoadFailed);
     }
   }
 
@@ -726,6 +768,10 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   void detached() {
     // Retire this window while it still owns the speaker queue. A later
     // dispose must not stop the shared speaker after another visit attached.
+    _retiredPackRevision = _store?.activeRevision;
+    _assistantVoicePending = false;
+    _logGeneration++;
+    _movesEpoch++;
     _notesForegroundEpoch++;
     _mapHandoff.close();
     _hush();
@@ -2455,10 +2501,11 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _hush();
     _objectTimer?.cancel();
     _focus.unfocus();
+    final attachment = _attachment;
     if (_voice.active || _voice.cancelling) await _voice.cancel();
-    if (!mounted) return;
+    if (!mounted || !attachment.isAttached) return;
     final call = _call = CompanionCallConversation((text, callNote) async {
-      if (!mounted || _attachment.preparing || !_attachment.isAttached) return false;
+      if (!mounted || attachment.preparing || !attachment.isAttached) return false;
       _callBaseline = _baselineUser;
       _retireGreeting();
       setState(() {
@@ -2466,12 +2513,14 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
         _myLine = text.trim();
       });
       _stage.command('mood', {'mood': 'thinking'});
-      await _attachment.submit(text, voiceCall: true, callNote: callNote);
+      await attachment.submit(text, voiceCall: true, callNote: callNote);
       return true;
-    }, _stop,
+    }, () async {
+      if (attachment.isAttached) await _stop();
+    },
         fullMode: () => mounted && !_light,
-        session: () => mounted && !_light ? _sessionId : null,
-        waitingForOwner: () => _attachment.waitingForOwner);
+        session: () => mounted && attachment.isAttached && !_light ? _sessionId : null,
+        waitingForOwner: () => attachment.waitingForOwner);
     await openVoiceCall(context, title: _name(context.l10n), conversation: call, backdrop: CallBackdrop.companion);
     if (identical(_call, call)) _call = null;
   }
@@ -3524,12 +3573,13 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
 
   Future<void> _restart() async {
     final l10n = context.l10n;
+    final attachment = _attachment;
     final ok = await _confirm(l10n.companionMenuRestart, l10n.companionMenuRestartLightConfirm);
-    if (!ok || !mounted || !_attachment.isAttached) return;
+    if (!ok || !mounted || !attachment.isAttached) return;
     _hush();
     _settleTimer?.cancel();
-    await _attachment.restart();
-    if (!mounted || !_attachment.isAttached) return;
+    await attachment.restart();
+    if (!mounted || !attachment.isAttached) return;
     setState(() {
       _running = false;
       _myLine = null;
@@ -3590,10 +3640,9 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     // What her invitation depends on that only a build can see: this page in
     // front (a sheet or another page over her isn't), a screen reader, the switch.
     // Another of the section's pages over her room hides it like a page on top.
-    final routeShown =
-        TickerMode.valuesOf(context).enabled &&
-        (ModalRoute.isCurrentOf(context) ?? true) &&
-        (!widget.sections || _tab == _CompanionTab.room);
+    final currentRoute = TickerMode.valuesOf(context).enabled && (ModalRoute.isCurrentOf(context) ?? true);
+    if (currentRoute) _restoreWindowAfterFrame();
+    final routeShown = currentRoute && (!widget.sections || _tab == _CompanionTab.room);
     if (_routeShown && !routeShown) {
       _checkNotesSelectionRoute();
     }
@@ -3814,7 +3863,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
             ],
           ),
         ),
-        if (showStage && _stageReady)
+        if (showStage && _stageReady && _attachment.isAttached)
           Positioned(
             left: companionEdge,
             right: companionEdge,

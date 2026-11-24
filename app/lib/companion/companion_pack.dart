@@ -283,11 +283,18 @@ class CompanionPackStore {
 
   Directory get pack => Directory('${root.path}/pack');
 
-  Future<bool> installed() => _exclusive(
-    () async =>
-        await File('${pack.path}/runtime/live2dcubismcore.min.js').exists() &&
-        await File('${pack.path}/character/index.json').exists(),
-  );
+  Future<bool> installed() => _exclusive(_isInstalled);
+
+  Future<bool> _isInstalled() async =>
+      await File('${pack.path}/runtime/live2dcubismcore.min.js').exists() &&
+      await File('${pack.path}/character/index.json').exists();
+
+  /// The room opens on one active directory, including when returning after a switch.
+  Future<({bool installed, CompanionCharacter character, String? key})> roomIdentity() => _exclusive(() async => (
+    installed: await _isInstalled(),
+    character: await _characterOf(pack),
+    key: await _characterKeyOf(pack),
+  ));
 
   /// A file-integrity gate for offering the floating renderer. The pinned
   /// runtime, index and all model references must be complete. This cannot
