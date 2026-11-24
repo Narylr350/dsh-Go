@@ -63,7 +63,10 @@ class TokenRateMeter {
   void add(DateTime at, double tokens) {
     if (tokens <= 0) return;
     final last = lastAt;
-    if (last == null || at.difference(last) > stallAfter) _burstStart = at;
+    if (last == null || at.difference(last) > stallAfter) {
+      _samples.clear();
+      _burstStart = at;
+    }
     // Out-of-order times (clock estimate moved) keep the list sorted enough:
     // a sample is never placed before the newest one.
     final when = last != null && at.isBefore(last) ? last : at;

@@ -47,6 +47,19 @@ void main() {
       expect(meter.rateAt(at(6000)), closeTo(50, 2.5));
     });
 
+    test('a restarted burst excludes earlier tokens still inside the window', () {
+      final meter = TokenRateMeter()..add(at(0), 30);
+      meter.add(at(1200), 3);
+      expect(meter.rateAt(at(1200)), closeTo(33 / 1.2, 1e-9));
+
+      // No sampling tick intervenes. The preceding 3 tokens are still
+      // inside the 2.5 s window when the new burst starts.
+      meter.add(at(2401), 1.2);
+      expect(meter.rateAt(at(2401)), closeTo(2.4, 1e-9));
+      meter.add(at(2501), 0.3);
+      expect(meter.rateAt(at(2501)), closeTo(3, 1e-9));
+    });
+
     test('quiet for 1.2 s is a stall: 0', () {
       final meter = TokenRateMeter()..add(at(0), 30);
       expect(meter.rateAt(at(1100)), greaterThan(0));
