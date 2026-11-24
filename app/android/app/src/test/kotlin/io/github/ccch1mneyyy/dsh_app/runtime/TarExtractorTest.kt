@@ -19,8 +19,8 @@ class TarExtractorTest {
             TarExtractor(dir) {}.extractDecoded(ByteArrayInputStream(tar))
             assertArrayEquals(unaligned, File(dir, "a").readBytes())
             assertArrayEquals(trailing, File(dir, "b").readBytes())
-            // On Linux (CI): b's two non-zero pages are all that is allocated.
-            if (File("/usr/bin/stat").canExecute()) {
+            // On Linux (CI, GNU stat): b's two non-zero pages are all that is allocated.
+            if (System.getProperty("os.name") == "Linux") {
                 val blocks = ProcessBuilder("/usr/bin/stat", "-c", "%b", File(dir, "b").path).start()
                     .inputStream.bufferedReader().readText().trim().toLong()
                 assertTrue("$blocks blocks", blocks * 512 <= 4 * 4096)
