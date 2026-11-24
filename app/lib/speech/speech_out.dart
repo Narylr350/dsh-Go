@@ -216,7 +216,8 @@ class _Span {
     final last = closed ? end : max(end, start + _slowBytes(text));
     if (played <= start || last <= start) return 0;
     if (closed && played >= last) return text.length;
-    return min(text.length, text.length * (played - start) ~/ (last - start));
+    final estimated = min(text.length, text.length * (played - start) ~/ (last - start));
+    return _completeSpeechPrefix(text, estimated);
   }
 
   /// About 0.3 s a CJK character and 0.09 s any other, at the voice's rate.

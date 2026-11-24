@@ -189,6 +189,26 @@ print('不读');
       expect(out.heard, '第一句话说完了。第二句也很长很长。');
     });
 
+    test('the heard prefix advances at complete supplementary characters', () async {
+      final audio = FakeAudio();
+      final out = DeepSeekOut(() async => _Seconds(), audio, call: true, levels: true);
+      try {
+        out
+          ..add('甲𠮷乙。')
+          ..finish();
+        await pumpEventQueue();
+        expect(out.heard, '');
+        audio.emit(PlayLevel(out.id, 0.5));
+        expect(out.heard, '甲'); // Halfway through the surrogate pair at 40 ms.
+        audio.emit(PlayLevel(out.id, 0.5));
+        expect(out.heard, '甲𠮷乙。');
+        audio.emit(PlayEvent(out.id, PlayPhase.done));
+        expect(out.heard, '甲𠮷乙。');
+      } finally {
+        out.stop();
+      }
+    });
+
     test('nobody to pay: fails before any sound', () async {
       final audio = FakeAudio();
       final out = DeepSeekOut(() async => null, audio);
