@@ -420,7 +420,7 @@ class CompanionAgentTaskTools {
     final operation = _operation(input, allowed: const ['create', 'amend', 'cancel', 'reopen']);
     final previous = operation == 'create' ? null : _target(input, 'phone.map_open');
     final executor = await maps.executorId();
-    _requireMap();
+    _requireMap(call);
     if (previous != null && operation != 'reopen' && previous['executor_id'] != executor) {
       throw const _TaskFailure('original_phone_required');
     }
@@ -446,10 +446,10 @@ class CompanionAgentTaskTools {
       final selected = await ui.chooseMap(
         maps,
         _text(input, 'address'),
-        isCurrent: () => _mapHere,
+        isCurrent: () => _mapHere && call.isCancelled?.call() != true,
         onRouteChanged: _selectionRoute,
       );
-      _requireMap();
+      _requireMap(call);
       if (selected == null) throw const _TaskFailure('selection_cancelled');
       task = previous == null
           ? _store.createMapOpenFromMessage(
@@ -955,7 +955,8 @@ class CompanionAgentTaskTools {
     if (!_here || !_hasHost) throw const _TaskFailure('original_host_or_window_changed');
   }
 
-  void _requireMap() {
+  void _requireMap(CompanionAgentToolCall call) {
+    if (call.isCancelled?.call() == true) throw const _TaskFailure('call_cancelled');
     if (!_mapHere) throw const _TaskFailure('original_map_window_changed');
   }
 

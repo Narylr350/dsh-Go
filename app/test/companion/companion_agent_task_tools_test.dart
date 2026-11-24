@@ -31,6 +31,7 @@ class _Ui implements CompanionAgentTaskUi {
   final foregroundBatches = <List<CompanionNotesForegroundCapture>>[];
   final foregroundCurrent = <bool>[];
   Future<void> Function()? beforeDirectory;
+  Future<void> Function(bool Function() current)? beforeMapChoice;
   MemoryRow? offlineDrafts;
   ({List<MemoryRow> inputs, MemoryRow outputDirectory})? offlineReceipts;
   final offlinePickers = <String>[];
@@ -146,6 +147,7 @@ class _Ui implements CompanionAgentTaskUi {
     CompanionAgentSelectionRoute? onRouteChanged,
   }) async {
     routes.add(onRouteChanged);
+    await beforeMapChoice?.call(isCurrent);
     return CompanionMapSpec(address: address, targetKind: 'choice');
   }
 
@@ -364,6 +366,51 @@ void main() {
       await peer.close();
     }
   });
+
+  for (final atSelection in [false, true]) {
+    test('cancelled map preparation never writes a map or opens its native scope (picker: $atSelection)', () async {
+      final entered = Completer<void>(), release = Completer<void>();
+      bool Function()? pickerIsCurrent;
+      var pickerCalls = 0, cancelled = false;
+      messenger.setMockMethodCallHandler(mapChannel, (call) async {
+        nativeCalls.add(call);
+        if (call.method == 'capabilities') {
+          if (!atSelection) {
+            entered.complete();
+            await release.future;
+          }
+          return {'executorId': 'actual-phone'};
+        }
+        if (call.method == 'openScope') return {'scopeId': 'unexpected'};
+        return null;
+      });
+      archive.ui.beforeMapChoice = (isCurrent) async {
+        pickerCalls++;
+        if (atSelection) {
+          pickerIsCurrent = isCurrent;
+          entered.complete();
+          await release.future;
+        }
+      };
+      final tool = archive.bind().bindings.singleWhere((b) => b.definition.name == 'map_open');
+      final work = tool.execute(CompanionAgentToolCall(
+        id: 'one-map', name: 'map_open', input: {'operation': 'create', 'address': '中山路一号'},
+        isCancelled: () => cancelled,
+      ));
+      try {
+        await entered.future;
+        cancelled = true;
+        if (atSelection) expect(pickerIsCurrent!(), isFalse);
+      } finally {
+        release.complete();
+      }
+      expect(_body(await work), containsPair('code', 'call_cancelled'));
+      expect(pickerCalls, atSelection ? 1 : 0);
+      expect(archive.memory.store.tasks(), isEmpty);
+      expect(archive.ui.acceptedTasks, isEmpty);
+      expect(nativeCalls.where((call) => call.method == 'openScope' || call.method == 'handoff'), isEmpty);
+    });
+  }
 
   test(
     'structured reminder calls retain one command across live replay and allocate the next actual ordinal',
