@@ -293,14 +293,16 @@ class CompanionScreenObserver {
       await _checkInFlight();
       return;
     }
-    if (agent.running) return;
+    // A successful native capture consumes its change marker, even on a
+    // text-only route. Sample the current page when classification is due.
+    if (agent.running || !_pace.cheapDue(agent.screenPaceNowMs)) return;
     _sampling = true;
     final generation = _generation;
     try {
       // Capability discovery sends no model request or screen data. Capture
       // pixels only after that explicit route is supported; other routes keep
       // the original text path before any model handoff occurs.
-      final vision = _pace.cheapDue(agent.screenPaceNowMs) ? await _refreshVision() : null;
+      final vision = await _refreshVision();
       if (!_enabled || generation != _generation || (vision != null && !vision.isCurrent())) return;
       final sample = await _channel.invokeMapMethod<String, Object?>(
         'companionScreenSample',

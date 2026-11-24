@@ -775,11 +775,26 @@ Future<_Visit> _shownOffer(List<http.Response> replies) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  testWidgets('the resident observer still requests a new sample on time after a wall rollback', (tester) async {
+  testWidgets('a changed page is classified on time after a wall rollback', (tester) async {
     var wall = _now, elapsed = 10000, permits = 0;
+    const open = '公开图书馆开馆', closed = '公开图书馆闭馆';
+    var page = open;
+    String? lastSampledPage;
+    final observed = <String>[];
+    final response = _message(words: jsonEncode({
+      'scene': 'reading', 'mood': 'calm', 'salience': 0, 'busy': false, 'quip': '', 'emotion': 'neutral',
+    }));
     final visit = (await tester.runAsync(
-      () => _Visit.open([], clock: () => CompanionInitiativeClock(wallMs: wall, monoMs: elapsed)),
+      () => _Visit.open([response, response], clock: () => CompanionInitiativeClock(wallMs: wall, monoMs: elapsed)),
     ))!;
+    final resident = visit.agent.retainAlwaysOn(
+      root: Future.value(visit.root),
+      character: const CompanionCharacter(name: '伙伴'),
+      moves: const CompanionMoves(),
+      sourceKey: null,
+      ui: _AmbientUi(),
+      mapHandoff: CompanionMapHandoff(visit.container.read(companionMapsProvider)),
+    );
     const phone = MethodChannel('dsh/phone'), events = MethodChannel('dsh/companion_screen/state');
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(events, (_) async => null);
@@ -791,9 +806,13 @@ void main() {
         return {'allowed': true};
       }
       if (call.method == 'companionScreenSample') {
-        if (args?['validate'] != null) return {'status': 'stale'}; // End before the model runs.
+        if (args?['validate'] != null) return {'status': 'valid'};
+        // The native sampler advances its own last-seen page at capture time.
+        if (lastSampledPage == page) return {'status': 'unchanged'};
+        lastSampledPage = page;
+        observed.add(page);
         return {
-          'status': 'observed', 'sample_id': 'sample-$elapsed', 'text': 'sample',
+          'status': 'observed', 'sample_id': 'sample-$elapsed', 'text': page,
           'package_name': 'test', 'observed_at_ms': wall, 'capture_method': 'tree',
         };
       }
@@ -807,23 +826,36 @@ void main() {
         await tester.pump(const Duration(seconds: 2)); // The resident's normal poll timer.
         await tester.pump();
       }
+      List<String> classifiedPages() => [
+        for (final request in visit.requests)
+          (jsonDecode(((request['messages'] as List).single as Map)['content'] as String)
+              as Map)['screen_observation']['text'] as String,
+      ];
       await poll();
       expect(permits, 1);
+      expect(classifiedPages(), [open]);
       final reference = CompanionScreenPace()..cheapStarted(elapsed);
       final wait = Iterable<int>.generate(60000, (index) => index + 1)
           .firstWhere((milliseconds) => reference.cheapDue(elapsed + milliseconds));
+      page = closed;
       wall -= const Duration(hours: 6).inMilliseconds;
       elapsed += wait - 1;
       await poll();
       expect(permits, 1);
+      expect(observed, [open], reason: 'the change must remain available until the next glance');
+      expect(classifiedPages(), [open]);
       elapsed++;
       await poll();
       expect(permits, 2);
+      expect(observed, [open, closed]);
+      expect(classifiedPages(), [open, closed]);
+      expect(visit.memory.store.requests().map((row) => row['terminal']), ['complete', 'complete']);
     } finally {
       observer.dispose();
       await tester.pump();
       messenger.setMockMethodCallHandler(phone, null);
       messenger.setMockMethodCallHandler(events, null);
+      resident.close();
       await tester.runAsync(visit.close);
     }
   });
