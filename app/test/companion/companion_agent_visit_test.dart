@@ -37,6 +37,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import 'companion_notice_triage_test.dart' show FakeCompanionNotices;
@@ -180,6 +181,24 @@ class _UnrestoredModel extends CompanionSessions {
   Future<CompanionBinding> ensureForCharacter(String? sourceKey, {
     String? memoryArchiveId, int? memoryControlRevision, String? replaceSessionId, String? requireSessionId,
   }) async => throw DshRemoteException(code, 'Original model could not be restored');
+}
+
+class _OpeningBindings extends InMemorySharedPreferencesStore {
+  _OpeningBindings() : super.withData({
+    'flutter.companion_sessions': jsonEncode({
+      'character:"local:local":"import:A"': {'id': 'a-existing', 'full': true},
+      'character:"local:local":"import:B"': {'id': 'b-existing', 'full': true},
+    }),
+  });
+  final entered = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<Map<String, Object>> getAll() async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return super.getAll();
+  }
 }
 
 class _Host extends ActiveHostController {
@@ -757,6 +776,41 @@ void main() {
   setUp(
     () => SharedPreferences.setMockInitialValues({'companion_mode': 'light', 'companion_initiative_enabled': false}),
   );
+
+  for (final changeRole in [false, true]) {
+    test('full restart waits for the stored role binding (switch role: $changeRole)', () async {
+      final visit = await _Visit.open([]);
+      const character = CompanionCharacter(name: '伙伴');
+      visit.attachment.updateCharacter(character, const CompanionMoves(), sourceKey: 'import:A');
+      await visit.container.read(companionModeProvider.notifier).choose(CompanionMode.full);
+      final light = visit.memory.store.lightSessionId;
+      visit.memory.store.submitMessage(id: 'light-B', sessionId: light, text: '旧轻量段', saidAtUtc: _now, offsetMinutes: 0);
+      final previous = SharedPreferencesStorePlatform.instance;
+      final platform = _OpeningBindings();
+      SharedPreferences.resetStatic();
+      SharedPreferencesStorePlatform.instance = platform;
+      try {
+        visit.container.invalidate(companionSessionsProvider);
+        final pending = visit.attachment.restart();
+        await platform.entered.future.timeout(const Duration(seconds: 5));
+        // Let the restart reach the blocked binding read in either version.
+        await Future<void>.delayed(Duration.zero);
+        if (changeRole) visit.attachment.updateCharacter(character, const CompanionMoves(), sourceKey: 'import:B');
+        platform.release.complete();
+        await pending;
+        final bindings = visit.container.read(companionSessionsProvider.notifier);
+        expect(bindings.ofCharacter(HostRef.local, 'import:B')?.sessionId, 'b-existing');
+        // An offline full restart may forget A so the next send creates it.
+        expect(bindings.ofCharacter(HostRef.local, 'import:A')?.sessionId, changeRole ? 'a-existing' : null);
+        expect(visit.memory.store.lightSessionId, light);
+        expect(visit.memory.store.messages(sessionId: light).single['id'], 'light-B');
+      } finally {
+        if (!platform.release.isCompleted) platform.release.complete();
+        SharedPreferencesStorePlatform.instance = previous;
+        SharedPreferences.resetStatic();
+      }
+    });
+  }
 
   test('explicit full mode with no connection uses the same source and real phone receipts, once', () async {
     final visit = await _Visit.open([http.Response('temporary failure', 503), _message(words: '收到了。')]);

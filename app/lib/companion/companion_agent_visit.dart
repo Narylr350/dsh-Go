@@ -1055,7 +1055,8 @@ class _CompanionAgentVisit {
     final sessions = ref.read(companionSessionsProvider.notifier);
     final host = ref.read(activeHostProvider);
     bool still() => current() && key == characterSourceKey && ref.read(activeHostProvider) == host;
-    final old = sessions.ofCharacter(host, key)?.sessionId;
+    final old = (await sessions.existingForCharacter(host, key))?.sessionId;
+    if (!still()) return;
     // Full mode binds her clean session at once, so the room and its main
     // session entry already point at it; the old one stays on the host, archived.
     var fresh = false;
