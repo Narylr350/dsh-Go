@@ -314,6 +314,9 @@ class CompanionReplyStream {
   );
 }
 
+// The first non-space unit of a complete or still-hidden partial mark.
+final _markStart = RegExp(r'\s*(?:[表动ea:：]|$)', caseSensitive: false);
+
 bool _safeReplyEnd(String kept) {
   if (kept.isEmpty) return true;
   if (kept[kept.length - 1].trim().isEmpty) return false;
@@ -321,7 +324,9 @@ bool _safeReplyEnd(String kept) {
   for (var i = kept.length - 1; i >= 0; i--) {
     switch (kept.codeUnitAt(i)) {
       case 0x5b || 0x3010: // [ 【
-        return false;
+        // A literal opener such as [0 cannot start a mark, but it can be
+        // part of an earlier mark's label. Keep looking back for that one.
+        if (_markStart.matchAsPrefix(kept, i + 1) != null) return false;
       case 0x5d || 0x3011: // ] 】
         return true;
     }

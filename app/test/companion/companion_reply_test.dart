@@ -144,6 +144,31 @@ void main() {
       expect(parseCompanionReply('[动作:挥手]只有动作。').marksAfterCorrection(before), isEmpty);
     });
 
+    test('literal openers and openers inside a custom label preserve every frame and raw range', () {
+      const options = {'徽[0': 'badge'};
+      for (final pieces in [
+        ['区间 [', '0,1) 包含零', '。'],
+        ['甲【表情:徽[', '0', '】乙'],
+        ['左 [  :暂', '停', '] 右'],
+        ['[0', '  ', '[E', 'motion:happy] 结束'],
+      ]) {
+        final reader = CompanionReplyStream(emotions: options);
+        var raw = '';
+        for (final piece in pieces) {
+          raw += piece;
+          for (final running in [true, false]) {
+            final actual = reader.read(raw, streaming: running);
+            final expected = parseCompanionReply(raw, streaming: running, emotions: options);
+            expect(actual.words, expected.words, reason: raw);
+            expect(actual.marks, expected.marks, reason: raw);
+            for (var unit = 0; unit < raw.length; unit++) {
+              expect(actual.wordRangesFrom(unit, unit + 1), expected.wordRangesFrom(unit, unit + 1), reason: raw);
+            }
+          }
+        }
+      }
+    });
+
     test('the same text gives the same marks on every streaming update', () {
       const text = '[表情:开心]你好呀[动作:挥手]，今天';
       final seen = <CompanionMark>[];
