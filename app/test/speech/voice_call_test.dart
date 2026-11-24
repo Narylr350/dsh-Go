@@ -279,6 +279,30 @@ void main() {
     expect(rig.conversation.sent.last, '（被打断在：好的，）\n换个话题吧');
   });
 
+  test('a cut-in quotes up to 30 complete Unicode code points', () async {
+    final tail = '甲' * 29;
+    final exact = '𠮷$tail';
+    final astral = '🐋' * 30;
+    for (final (heard, excerpt) in [
+      (exact, exact),
+      ('先$exact', '…$exact'),
+      (astral, astral),
+      ('先$astral', '…$astral'),
+      ('先${'甲' * 30}', '…${'甲' * 30}'),
+    ]) {
+      final rig = await speaking(verbatim: true);
+      try {
+        rig.outs.single.heard = heard;
+        await over(rig, '换个话题吧');
+        expect(rig.callNotes.last, '（语音通话）\n（被打断在：$excerpt）');
+        expect(rig.conversation.sent.last, '换个话题吧');
+        expect(rig.call.turns.first.her, heard);
+      } finally {
+        rig.call.dispose();
+      }
+    }
+  });
+
   for (final spoken in [false, true]) {
     test('full call keeps its spoken setting on each request and the cut only on the next (spoken: $spoken)', () async {
       final rig = _Rig(verbatim: true, spoken: spoken);

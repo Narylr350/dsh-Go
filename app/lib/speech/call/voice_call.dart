@@ -78,6 +78,16 @@ abstract class CallConversation {
 /// loudspeaker or the earpiece; [spokenHint] goes before the first message.
 typedef CallChoices = ({bool bargeIn, bool speaker, String? spokenHint, CallPause pause});
 
+/// At most the last 30 Unicode code points the person actually heard.
+String _cutExcerpt(String heard) {
+  final runes = RuneIterator.at(heard, heard.length);
+  for (var count = 0; count < 30; count++) {
+    if (!runes.movePrevious()) return heard;
+  }
+  final start = runes.rawIndex;
+  return start == 0 ? heard : '…${heard.substring(start)}';
+}
+
 /// One exchange of the call as it reads: what the person said, and her reply
 /// as far as it is known (all of it, or, [cut], as far as she got).
 @immutable
@@ -417,7 +427,7 @@ class VoiceCallController extends ChangeNotifier {
     final hint = _spokenHint;
     final cut = _cutAt;
     _cutAt = null;
-    final note = cut == null ? null : cutNote?.call(cut.length > 30 ? '…${cut.substring(cut.length - 30)}' : cut);
+    final note = cut == null ? null : cutNote?.call(_cutExcerpt(cut));
     final message = [if (!_hinted && hint != null) hint, ?note, _heard].join('\n');
     _hinted = true;
     _cued = false;
