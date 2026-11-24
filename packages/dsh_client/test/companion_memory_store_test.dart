@@ -50,6 +50,45 @@ void main() {
     await directory.delete(recursive: true);
   });
 
+  test('the phone log scopes before delivery and stops when one line is visible', () {
+    final a = store.ensureCompanionCharacter(sourceKey: 'local:a')['id']! as String;
+    final b = store.ensureCompanionCharacter(sourceKey: 'local:b')['id']! as String;
+    void add(String id, String session, String? character, String text, {String role = 'assistant'}) {
+      store.submitMessage(
+        id: id,
+        sessionId: session,
+        characterId: character,
+        text: text,
+        role: role,
+        saidAtUtc: now,
+        offsetMinutes: 0,
+      );
+    }
+
+    add('one', 'light:old', a, '[表情:开心]');
+    add('two', 'full:host', a, 'host');
+    add('three', 'light:new', b, 'B');
+    add('four', 'Light:old', null, 'different prefix');
+    expect(store.anyPhoneLogMessage(a, (row) => row['text'] != '[表情:开心]'), isFalse);
+    expect(store.anyPhoneLogMessage(null, (_) => true), isFalse);
+    add('five', 'light:new', null, 'legacy');
+    add('six', 'light:new', a, '我的原文：\n（时间：周二）', role: 'user');
+    expect(store.phoneLogMessages(a).map((row) => row['text']), ['[表情:开心]', 'legacy', '我的原文：\n（时间：周二）']);
+    expect(store.phoneLogMessages(b).map((row) => row['text']), ['B', 'legacy']);
+    expect(store.phoneLogMessages(null).single['character_id'], isNull);
+    var considered = 0;
+    expect(
+      store.anyPhoneLogMessage(a, (_) {
+        considered++;
+        return true;
+      }),
+      isTrue,
+    );
+    expect(considered, 1);
+    expect(() => store.anyPhoneLogMessage(a, (_) => throw StateError('reader failed')), throwsStateError);
+    expect(store.phoneLogMessages(a), hasLength(3));
+  });
+
   test('missing v1 probe does not create a file or directory', () async {
     final absent = Directory('${directory.path}/absent');
     final local = CompanionLocalStore(appDirectory: absent, nowMilliseconds: () => now);

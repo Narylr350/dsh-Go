@@ -2582,6 +2582,17 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
     _stage.command('covered', {'on': false});
   }
 
+  CompanionLine _phoneLogLine(MemoryRow row) => row['role'] == 'user'
+      ? CompanionLine.user(row['text']! as String)
+      : CompanionLine.her(row['text']! as String);
+
+  bool get _hasVisibleLightEntries {
+    bool visible(CompanionLine line) => companionLogFromLight([line]).isNotEmpty;
+    return (_lightHistory?.lines.any(visible) ?? false) ||
+        companionLogFromLight(const [], speaking: _attachment.pendingText).isNotEmpty ||
+        (_memoryOwner?.store.anyPhoneLogMessage(_attachment.characterId, (row) => visible(_phoneLogLine(row))) ?? false);
+  }
+
   List<CompanionLogEntry> get _visibleLightEntries {
     List<CompanionLogEntry> read(List<CompanionLine> lines, {bool legacy = false, String? speaking}) => [
       for (final entry in companionLogFromLight(lines, speaking: speaking))
@@ -2595,14 +2606,8 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
       if (store == null) return const [];
       final role = _attachment.characterId;
       List<CompanionLogEntry> project() => [
-        for (final row in store.messages())
-          if ((row['session_id']! as String).startsWith('light:') &&
-              (row['character_id'] == null || row['character_id'] == role))
-            ...read([
-              row['role'] == 'user'
-                  ? CompanionLine.user(row['text']! as String)
-                  : CompanionLine.her(row['text']! as String),
-            ], legacy: row['character_id'] == null),
+        for (final row in store.phoneLogMessages(role))
+          ...read([_phoneLogLine(row)], legacy: row['character_id'] == null),
       ];
       if (!_logOpen) return project();
       // New/edited messages advance next_seq. Forget can remove older messages
@@ -3228,7 +3233,7 @@ class _CompanionPageState extends ConsumerState<CompanionPage>
   /// for 记忆 and 交代的事, which the sections already have as pages.
   List<Widget> _panel(L10n l10n, void Function(VoidCallback action, {bool stage}) run, {required bool tiles}) {
     final light = _light;
-    late final hasLightEntries = _visibleLightEntries.isNotEmpty;
+    late final hasLightEntries = _hasVisibleLightEntries;
     final credit = [
       if (_character.author case final author?) l10n.companionCreditAuthor(author),
       ?_character.license,

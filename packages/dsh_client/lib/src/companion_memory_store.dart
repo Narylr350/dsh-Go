@@ -733,6 +733,30 @@ class CompanionMemoryStore {
   List<MemoryRow> messages({String? sessionId, bool forModel = false, int? limit}) =>
       _readMemoryMessages(sessionId: sessionId, forModel: forModel, limit: limit);
 
+  /// On-device history spans old light sessions and includes shared legacy lines.
+  static const _phoneLogQuery = """
+    SELECT role, text, character_id FROM memory_messages
+    WHERE (character_id IS NULL OR character_id=?) AND session_id GLOB 'light:*'
+  """;
+
+  List<MemoryRow> phoneLogMessages(String? characterId) =>
+      _db.select('$_phoneLogQuery ORDER BY first_seq', [characterId]);
+
+  /// Some replies contain only stage directions. Let the presenter decide what can be shown,
+  /// stopping the unordered query at its first visible line.
+  bool anyPhoneLogMessage(String? characterId, bool Function(MemoryRow row) visible) {
+    final statement = _db.prepare(_phoneLogQuery);
+    try {
+      final rows = statement.selectCursor([characterId]);
+      while (rows.moveNext()) {
+        if (visible(rows.current)) return true;
+      }
+      return false;
+    } finally {
+      statement.close();
+    }
+  }
+
   /// Model history is scoped before LIMIT. A missing installed character does
   /// not turn legacy assistant speech into the new character's own history.
   List<MemoryRow> modelMessages({String? sessionId, required String? characterId, int? limit}) => _readMemoryMessages(
