@@ -171,16 +171,17 @@ class CompanionMemoryEmbeddings extends ChangeNotifier {
   /// Null means the optional encoder is unavailable. An empty list is a real
   /// empty candidate/result set. Neither result is a model reference grant.
   /// Query text controls relevance. Only [explicitInput] may supply the existing
-  /// one-selection topic exception; observations leave it null.
+  /// one-selection topic exception; observations leave it null. Pass a null
+  /// [limit] when the caller must fit the ranked cards to its own text budget.
   Future<List<MemoryRow>?> rank({
     required CompanionMemoryStore store,
     required String? characterId,
     required String query,
     required bool Function() isCurrent,
     String? explicitInput,
-    int limit = 6,
+    int? limit = 6,
   }) async {
-    if (limit < 1 || limit > 20) throw ArgumentError.value(limit, 'limit');
+    if (limit != null && (limit < 1 || limit > 20)) throw ArgumentError.value(limit, 'limit');
     final generation = _generation;
     void current() {
       if (_disposed || generation != _generation || !isCurrent()) {
@@ -270,7 +271,8 @@ class CompanionMemoryEmbeddings extends ChangeNotifier {
         return order != 0 ? order : (a.card['id']! as String).compareTo(b.card['id']! as String);
       });
       sameModel();
-      return [for (final row in ranked.take(limit)) row.card];
+      final result = limit == null ? ranked : ranked.take(limit);
+      return [for (final row in result) row.card];
     } on PlatformException {
       sameModel();
       return null;

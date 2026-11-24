@@ -101,6 +101,77 @@ void main() {
     await directory.delete(recursive: true);
   });
 
+  test('prompt and recall fit lower-ranked short cards within the active role', () async {
+    final a = store.ensureCompanionCharacter(sourceKey: 'test:budget-a')['id']! as String;
+    final b = store.ensureCompanionCharacter(sourceKey: 'test:budget-b')['id']! as String;
+    final privateB = story(b, '乙自己记得的灯塔');
+    // More than twenty equally high-scoring long facts all fit alone.
+    final long = [for (var i = 0; i < 21; i++) shared('灯塔记录$i：${'海' * 495}')];
+    final own = story(a, '我和甲在灯塔相遇');
+    final short = [for (var i = 0; i < 6; i++) shared('灯塔线索$i')];
+    final encoded = <String>[];
+    native = (call) async {
+      if (call.method == 'load') return {'modelKey': 'budget-test-model', 'dimensions': 512};
+      expect(call.method, 'embed');
+      final args = Map<String, Object?>.from(call.arguments as Map);
+      final texts = (args['texts'] as List).cast<String>();
+      encoded.addAll(texts);
+      return [
+        for (final text in texts)
+          if (args['query'] == true || text.startsWith('灯塔记录'))
+            unit(0)
+          else
+            (unit(0)..[0] = 0.8)..[1] = 0.6,
+      ];
+    };
+    final memory = CompanionMemoryOwner(
+      store, CompanionLocal.at(directory, nowMilliseconds: () => now),
+      nowMilliseconds: () => now, embeddings: embeddings,
+    );
+    owner = memory;
+    final selected = await memory.selectForAgent(
+      '说说灯塔', characterId: a, offsetMinutes: 0, isCurrent: () => true,
+    );
+    final candidates = store.memoryRetrievalCandidates(characterId: a);
+    final expected = selectRankedMemoryContext(
+      candidates, rankedIds: [for (final card in [...long, own, ...short]) card['id']! as String],
+      nowMs: now, controlRevision: selected.controlRevision,
+    );
+    expect(expected.ids, [long.first['id'], own['id'], for (final card in short.take(4)) card['id']]);
+    expect(expected.block.runes.length, lessThanOrEqualTo(memoryContextScalarLimit));
+    final source = store.submitMessage(
+      id: id(), sessionId: 'light:budget', characterId: a,
+      text: '说说灯塔', saidAtUtc: now, offsetMinutes: 0,
+    );
+    final turnId = store.beginAgentTurn(
+      messageId: source['id']! as String, expectedSourceRev: 1, shownCardRevisions: const {},
+    )['id']! as String;
+    final rankedIds = await memory.recallIds(
+      '灯塔', characterId: a, explicitUserInput: source['text']! as String,
+      isCurrent: () => store.isAgentTurnCurrent(turnId),
+    );
+    final receipt = store.applyAgentMemoryTool(
+      turnId: turnId, callId: 'budget-recall', toolName: 'recall',
+      input: {'query': '灯塔'}, rankedRecallIds: rankedIds,
+    );
+    expect(receipt.applied, isTrue);
+    expect([selected.ids, receipt.recallSelection!.ids], [expected.ids, expected.ids]);
+    final granted = store.beginAgentTurn(
+      messageId: source['id']! as String, expectedSourceRev: 1, shownCardRevisions: const {},
+    )['shown_cards'] as Map;
+    expect(granted.keys, unorderedEquals(expected.ids));
+    store.closeAgentTurn(turnId);
+    expect(encoded, isNot(contains(privateB['text'])));
+    final items = (jsonDecode(selected.block) as Map)['items'] as List;
+    expect(items.map((item) => item['id']), expected.ids);
+    final top = await embeddings.rank(store: store, characterId: a, query: '灯塔', isCurrent: () => true);
+    expect(top!.map((row) => row['id']), [for (final card in long.take(6)) card['id']]);
+    final selectedB = await memory.selectForAgent(
+      '说说灯塔', characterId: b, offsetMinutes: 0, isCurrent: () => true,
+    );
+    expect(selectedB.ids, [long.first['id'], privateB['id'], for (final card in short.take(4)) card['id']]);
+  });
+
   test('role filtering precedes native input and ranking does not grant or revise memories', () async {
     final a = store.ensureCompanionCharacter(sourceKey: 'test:character-a')['id']! as String;
     final b = store.ensureCompanionCharacter(sourceKey: 'test:character-b')['id']! as String;

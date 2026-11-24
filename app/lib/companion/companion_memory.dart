@@ -372,6 +372,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
       query: query,
       explicitInput: explicitUserInput,
       isCurrent: current,
+      limit: null, // The recall transaction filters and budgets the actual grant.
     );
     if (!current()) throw const CompanionMemoryRetrievalCancelled();
     return ranked == null ? null : [for (final row in ranked) row['id']! as String];
@@ -400,6 +401,7 @@ class CompanionMemoryOwner extends ChangeNotifier {
             query: input,
             explicitInput: explicitUserInput,
             isCurrent: current,
+            limit: null, // Lower-ranked short cards can still fit the prompt budget.
           );
     if (!current()) throw const CompanionMemoryRetrievalCancelled();
     final cards = store.memoryRetrievalCandidates(characterId: characterId, input: explicitUserInput);
