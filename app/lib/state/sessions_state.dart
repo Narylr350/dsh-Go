@@ -126,7 +126,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
   bool get _hasArchivePlans => _archives.isNotEmpty || _archiveLeases.isNotEmpty;
 
   /// While a list loads, it picks the waiting set up itself.
-  void _publishVisibleRows() {
+  void _showArchiveRows() {
     if (_archiveBatchDepth == 0 && ref.mounted && state.hasValue && !state.isLoading) state = AsyncData(_visible());
   }
 
@@ -189,7 +189,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     ref.listen(activeHostProvider, (previous, next) {
       if (previous != next && _hasArchivePlans) {
         _retireArchives();
-        _publishVisibleRows();
+        _showArchiveRows();
       }
     });
     ref.onDispose(_retireArchives);
@@ -197,10 +197,6 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     // launch: hide it from the drawer as soon as that's known.
     ref.listen(companionSessionFilterProvider, (_, _) {
       if (state.hasValue && !state.isLoading) state = AsyncData(_visible());
-    });
-    ref.listen(replyVersionsProvider, (previous, next) {
-      final versions = next.asData?.value;
-      if (versions != null && versions.host == _host && versions != previous?.value) _publishVisibleRows();
     });
     final seq = ++_loadSeq;
     final host = ref.watch(activeHostProvider);
@@ -235,7 +231,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     final muxChanges = conn.client.mux.states.listen((_) {
       if (!_hasArchivePlans) return;
       _retireArchives();
-      _publishVisibleRows();
+      _showArchiveRows();
     });
     ref.onDispose(() => unawaited(muxChanges.cancel()));
     final sub = conn.client.hostEvents.listen((event) {
@@ -341,20 +337,22 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     // Her conversation lives in 伙伴小屋, not the drawer.
     final companion = ref.read(companionSessionFilterProvider);
     final host = ref.read(activeHostProvider);
-    final rows = _rows()
-        .where(
-          (s) =>
-              !s.blank &&
-              !s.isSubagent &&
-              !_archived.contains(s.sessionId) &&
-              !pendingIds.contains(s.sessionId) &&
-              !companion(host, s.sessionId),
-        )
-        .toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    final versions = ref.read(replyVersionsProvider).value;
-    final visible = versions != null && versions.host == host ? versions.collapse(rows) : rows;
-    return ref.read(readListCacheProvider).derive(visible, _origin);
+    return ref
+        .read(readListCacheProvider)
+        .derive(
+          _rows()
+              .where(
+                (s) =>
+                    !s.blank &&
+                    !s.isSubagent &&
+                    !_archived.contains(s.sessionId) &&
+                    !pendingIds.contains(s.sessionId) &&
+                    !companion(host, s.sessionId),
+              )
+              .toList()
+            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
+          _origin,
+        );
   }
 
   /// The last `session/list`, with the titles read since ([_readTitles]).
@@ -711,7 +709,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
       pending._closeWindow();
       restoreCurrent();
       if (!pending._done.isCompleted) pending._done.complete(null);
-      _publishVisibleRows();
+      _showArchiveRows();
       return true;
     };
     // A synchronous selection listener can obtain this plan after it is
@@ -755,7 +753,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
       _archives.remove(pending);
       if (pending.owned) {
         if (restoreSelection != null && failed.contains(restoreSelection)) restoreCurrent();
-        _publishVisibleRows();
+        _showArchiveRows();
         unawaited(refresh());
       }
       if (!pending._done.isCompleted) {
@@ -778,7 +776,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
       }
     } finally {
       _archiveBatchDepth--;
-      if (_archiveBatchDepth == 0) _publishVisibleRows();
+      if (_archiveBatchDepth == 0) _showArchiveRows();
     }
     if (intent != _archiveIntent) throw StateError('archive request superseded');
     if (!pending.owned) throw const DshClosedException('session owner changed');
@@ -807,7 +805,7 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     );
     unawaited(pending.windowClosed.then((_) => lifecycle.dispose()));
     pending._timer = Timer(archiveUndoWindow, () => unawaited(commit()));
-    _publishVisibleRows();
+    _showArchiveRows();
     return pending;
   }
 

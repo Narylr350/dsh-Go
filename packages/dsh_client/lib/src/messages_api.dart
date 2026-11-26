@@ -132,8 +132,9 @@ extension MessageActions on DshClient {
   ///   together with the next message;
   /// * an inherited title `T` becomes `T (1)` (`T (2)` from `T (1)`), named
   ///   from [sourceTitle] when given — what the official web client does.
-  ///   Pass [bumpTitle] as false to keep the title for an in-chat version.
-  ///   A fork without a title keeps automatic titling.
+  ///   A manual fork without an inherited title keeps automatic titling.
+  ///   Pass [bumpTitle] as false to preserve [sourceTitle] for an in-chat version,
+  ///   even when it was set after the fork point.
   ///
   /// Throws [DshRemoteException] when the fork itself fails
   /// (`session/fork-unavailable` for a seq the source does not have). The
@@ -161,19 +162,18 @@ extension MessageActions on DshClient {
         left++;
       }
     }
-    String? title;
     final inherited = projections?.title;
-    if (bumpTitle && inherited != null && inherited.trim().isNotEmpty) {
-      final base = sourceTitle != null && sourceTitle.trim().isNotEmpty
-          ? sourceTitle
-          : inherited;
+    final source = sourceTitle?.trim().isNotEmpty == true ? sourceTitle : null;
+    String? title = bumpTitle ? null : inherited;
+    final desired = bumpTitle
+        ? (inherited == null || inherited.trim().isEmpty ? null : bumpedForkTitle(source ?? inherited))
+        : source;
+    if (desired != null && (bumpTitle || desired != inherited)) {
       try {
-        title = await renameSession(child, bumpedForkTitle(base));
+        title = await renameSession(child, desired);
       } catch (_) {
-        title = null;
+        // The fork still exists. Report only the title we know it has.
       }
-    } else {
-      title = inherited;
     }
     return ForkOutcome(child, title: title, leftQueued: left);
   }

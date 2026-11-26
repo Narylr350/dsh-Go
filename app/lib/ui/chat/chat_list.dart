@@ -272,6 +272,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
   /// The rows above are measured as they come into view, so the top can turn out nearer or further
   /// than it first looked: stop on arriving, and go on if it's further. A finger takes over.
   Future<void> _runToTop() async {
+    _openingVersion = null;
     if (!_scroll.hasClients) return;
     _stopGlide();
     _pinned = false;
@@ -386,6 +387,8 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
   bool _running = false;
   bool _hasVersions = false;
   ChatReveal? _openingVersion;
+  bool _readingVersionHistory = false;
+  int? _versionReadCursor;
   int? _bindingVersionSeq;
 
   /// 正在分叉的那条回复(挡连点)。
@@ -420,7 +423,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
     widget.toTop?.onTap = _goToTop;
     final reveal = ref.read(chatRevealProvider);
     if (reveal != null && reveal.sessionId == widget.sessionId && reveal.promptSeq != null) {
-      _openingVersion = reveal;
+      if (reveal.host == ref.read(activeHostProvider)) _openingVersion = reveal;
       _afterFrame(() => ref.read(chatRevealProvider.notifier).consumeVersion(reveal));
     }
   }
@@ -542,6 +545,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
   }
 
   void jumpToBottom() {
+    _openingVersion = null;
     _pinned = true;
     _goingUp = false;
     _followNow = true;
@@ -607,6 +611,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
 
   bool _onScroll(ScrollNotification n) {
     if (n.depth != 0) return false;
+    if (n is UserScrollNotification && n.direction != ScrollDirection.idle) _openingVersion = null;
     // Only this list's drag dismisses the keyboard. A code well's inner
     // horizontal drag must keep its SelectionArea focused.
     if (n is ScrollUpdateNotification && n.dragDetails != null) {
@@ -649,7 +654,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
   }
 
   void _maybeLoadOlder(ScrollMetrics metrics) {
-    if (metrics.pixels - metrics.minScrollExtent > 800) return;
+    if (_openingVersion != null || metrics.pixels - metrics.minScrollExtent > 800) return;
     final state = ref.read(chatProvider(widget.sessionId));
     if (state.hasMoreHistory && !state.loadingOlder && !state.loading) {
       ref.read(chatProvider(widget.sessionId).notifier).loadOlder();
@@ -792,10 +797,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
       _splitKey = null;
     } else if (!_splitChosen) {
       _splitChosen = true;
-      final versionKey = _openingVersionKey();
-      _openingVersion = null;
-      _splitKey = versionKey ?? _lastStableKey(beforeSeq: s.runningTurn?.startSeq);
-      if (versionKey != null) _pinned = versionKey == _rows.lastOrNull?.key;
+      _splitKey = _lastStableKey(beforeSeq: s.runningTurn?.startSeq);
       _snapNext = true;
     } else if (_splitKey == null && prepended) {
       // A partial window can have no stable row before its running turn.
@@ -822,7 +824,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
         'held': _held,
       });
     }
-    if (s.hasMoreHistory) {
+    if (s.hasMoreHistory && _openingVersion == null) {
       // 内容不满一屏时没有滚动事件可等:帧后看一眼是否已经在顶端。
       _afterFrame(() {
         if (_scroll.hasClients) _maybeLoadOlder(_scroll.position);
@@ -889,9 +891,63 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
     });
   }
 
-  String? _openingVersionKey() {
-    final reveal = _openingVersion;
-    if (reveal == null) return null;
+  bool _ownsVersionOpen(ChatReveal reveal) =>
+      mounted &&
+      identical(_openingVersion, reveal) &&
+      ref.read(activeHostProvider) == reveal.host &&
+      ref.read(currentSessionProvider) == reveal.sessionId &&
+      widget.sessionId == reveal.sessionId;
+
+  void _locateOpeningVersion(ChatState s, ChatReveal reveal) {
+    if (s.loading || _readingVersionHistory) return;
+    final key = _openingVersionKey(reveal);
+    if (key != null) {
+      if (_splitKey != key) _historySliver = null;
+      _splitChosen = true;
+      _splitKey = key;
+      _pinned = key == _rows.lastOrNull?.key;
+      if (_pinned) _follow();
+      _afterFrame(() {
+        if (!_ownsVersionOpen(reveal)) return;
+        if (!_pinned && _scroll.hasClients) {
+          final position = _scroll.position;
+          // The new center is the requested row, but a previous layout may
+          // have moved the offset. Zero, when in bounds, reveals that center.
+          final offset = 0.0.clamp(position.minScrollExtent, position.maxScrollExtent).toDouble();
+          if (offset != position.pixels) position.jumpTo(offset);
+          _showJump.value = !_atBottom(160);
+        }
+        _openingVersion = null;
+      });
+      return;
+    }
+    if (s.loadingOlder) return;
+    final chat = ref.read(chatProvider(reveal.sessionId).notifier);
+    // Use loadOlder's cursor, not visible rows: metadata-only pages can
+    // advance the log. Once it passes the prompt, older pages cannot help.
+    final cursor = chat.events.firstOrNull?.seq;
+    final previous = _versionReadCursor;
+    if (!s.hasMoreHistory || cursor == null || cursor <= reveal.promptSeq! || previous != null && cursor >= previous) {
+      // Leave the ordinary initial split in place and suppress prefetch for
+      // this frame too, so a stalled version request is not retried at once.
+      _afterFrame(() {
+        if (_ownsVersionOpen(reveal)) _openingVersion = null;
+      });
+      return;
+    }
+    _readingVersionHistory = true;
+    _versionReadCursor = cursor;
+    _afterFrame(() async {
+      if (!_ownsVersionOpen(reveal)) {
+        _readingVersionHistory = false;
+        return;
+      }
+      await chat.loadOlder();
+      if (_ownsVersionOpen(reveal)) setState(() => _readingVersionHistory = false);
+    });
+  }
+
+  String? _openingVersionKey(ChatReveal reveal) {
     String? key;
     for (final row in _rows) {
       if (row case UserRow(:final item)) {
@@ -1021,6 +1077,15 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
       artifacts: ref.watch(sessionArtifactsProvider(widget.sessionId)),
       compactTools: _hers,
     );
+    if (_openingVersion case final reveal?) {
+      ref.listen(activeHostProvider, (_, next) {
+        if (next != reveal.host) _openingVersion = null;
+      });
+      ref.listen(currentSessionProvider, (_, next) {
+        if (next != reveal.sessionId) _openingVersion = null;
+      });
+      _locateOpeningVersion(s, reveal);
+    }
     final rows = _rows;
     final split = _split;
     _fluid = AppMotion.fluid(context);
@@ -1082,6 +1147,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
               Listener(
                 onPointerDown: (_) {
                   _fingers++;
+                  _openingVersion = null;
                   // The list stops where it is, under the finger.
                   if (_gliding) {
                     _stopGlide();
@@ -1724,10 +1790,16 @@ class _VersionNavigation extends ConsumerWidget {
     final anchor = ref.watch(chatProvider(sessionId).select((s) => _versionAnchor(s, seq, afterReply: afterReply)));
     if (anchor == null) return const SizedBox.shrink();
     final known = ref.watch(hostSessionsProvider);
+    final archived = ref.read(sessionsProvider.notifier).archivedSessions.map((session) => session.sessionId).toSet();
     final selection = family.selectionFor(
       sessionId,
       anchor.promptSeq,
-      availableSessionIds: known.isEmpty ? null : family.sessionIdsFor(sessionId).where(known.containsKey).toSet(),
+      availableSessionIds: known.isEmpty && archived.isEmpty
+          ? null
+          : family
+                .sessionIdsFor(sessionId)
+                .where((id) => (known.isEmpty || known.containsKey(id)) && !archived.contains(id))
+                .toSet(),
     );
     if (selection == null || afterReply != (!selection.hasEdits && anchor.hasReply)) {
       return const SizedBox.shrink();

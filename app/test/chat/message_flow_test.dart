@@ -5,6 +5,8 @@
 // composer, sent as a blockquote, shown as a quote in the bubble, split back
 // out on 编辑后重发); and 保存到相册 on a picture in a message.
 
+import 'dart:async';
+
 import 'package:dsh_app/state/attachments.dart' show sessionImageProvider;
 import 'package:dsh_app/state/chat_state.dart';
 import 'package:dsh_app/state/hosts_state.dart' show activeHostProvider;
@@ -71,6 +73,52 @@ List<String> _composerTexts(WidgetTester tester) => [
 ];
 
 Finder _lastReply() => find.byType(AssistantMessage).last;
+
+class _PagedVersionChat extends FakeChatController {
+  _PagedVersionChat() : super('fork-session', const ChatState());
+
+  final tail = <ChatItem>[
+    for (var seq = 100; seq < 140; seq++) _user(seq, 'Recent prompt $seq'),
+  ];
+  final pages = <Future<void> Function()>[];
+  int _oldest = 100;
+
+  void show(int oldest, {List<ChatItem>? items}) {
+    _oldest = oldest;
+    emit(ChatState(items: items ?? tail, hasMoreHistory: true, loading: false));
+  }
+
+  @override
+  Iterable<SessionLogEvent> get events => [UnknownEvent(_oldest, DateTime.utc(2026), 'fixture', const {})];
+
+  @override
+  Future<void> loadOlder() async {
+    final index = loadOlderCalls++;
+    emit(state.copyWith(loadingOlder: true));
+    if (index < pages.length) await pages[index]();
+    emit(state.copyWith(loadingOlder: false));
+  }
+}
+
+Future<ProviderContainer> _openPagedVersion(WidgetTester tester, _PagedVersionChat chat) async {
+  await _pump(tester, overrides: [chatProvider(chat.sessionId).overrideWith(() => chat)]);
+  final container = _container(tester);
+  final record = container.read(replyVersionsProvider.notifier).recordFork(
+    container.read(activeHostProvider),
+    parentSessionId: 's1',
+    parentPromptSeq: 1,
+    childSessionId: chat.sessionId,
+    childPromptSeq: 10,
+    edited: true,
+  );
+  await pumpFrames(tester);
+  await record;
+  await tester.tap(find.byTooltip('下一版回答'));
+  await tester.pump();
+  expect(container.read(currentSessionProvider), chat.sessionId);
+  expect(chat.loadOlderCalls, 0, reason: 'wait for the first snapshot');
+  return container;
+}
 
 void main() {
   setUpAll(loadTestFonts);
@@ -205,6 +253,52 @@ void main() {
       await pumpFrames(tester);
       expect(harness.controllers['fork-session']!.sent, [_question]);
     });
+  });
+
+  testWidgets('version arrows page past the first snapshot and reveal the older prompt', (tester) async {
+    final chat = _PagedVersionChat();
+    chat.pages.addAll([
+      () async => chat.show(60), // An older cursor, but no new rows.
+      () async => chat.show(10, items: [_user(10, 'Older version prompt'), ...chat.tail]),
+    ]);
+    await _openPagedVersion(tester, chat);
+    chat.show(100);
+    await pumpFrames(tester, 12);
+
+    expect(chat.loadOlderCalls, 2, reason: 'stop on a hit even with more history');
+    expect(find.text('Older version prompt').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('上一版回答').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('a version lookup with no cursor progress falls back without reloading', (tester) async {
+    final chat = _PagedVersionChat();
+    chat.pages.add(() async => chat.show(100, items: [chat.tail.last]));
+    await _openPagedVersion(tester, chat);
+    chat.show(100, items: [chat.tail.last]);
+    await pumpFrames(tester, 12);
+
+    expect(chat.loadOlderCalls, 1);
+    expect(find.text('Recent prompt 139').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('leaving the version stops paging after the current read', (tester) async {
+    final chat = _PagedVersionChat();
+    final firstPage = Completer<void>();
+    chat.pages.add(() async {
+      await firstPage.future;
+      chat.show(60);
+    });
+    final container = await _openPagedVersion(tester, chat);
+    chat.show(100);
+    await pumpFrames(tester);
+    expect(chat.loadOlderCalls, 1);
+
+    container.read(currentSessionProvider.notifier).select('s1');
+    await tester.pump();
+    firstPage.complete();
+    await pumpFrames(tester);
+    expect(chat.loadOlderCalls, 1);
+    expect(find.text(_question).hitTestable(), findsOneWidget);
   });
 
   testWidgets('⋯ opens the same menu as a long-press', (tester) async {

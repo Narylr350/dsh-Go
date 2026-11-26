@@ -1,9 +1,12 @@
 import 'package:dsh_app/state/agents_state.dart';
 import 'package:dsh_app/state/connection_state.dart';
+import 'package:dsh_app/state/drawer_view_state.dart';
 import 'package:dsh_app/state/hosts_state.dart';
 import 'package:dsh_app/state/read_list_identity.dart';
 import 'package:dsh_app/state/reply_versions_state.dart';
+import 'package:dsh_app/state/session_search.dart';
 import 'package:dsh_app/state/sessions_state.dart';
+import 'package:dsh_app/state/workspaces_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -44,6 +47,50 @@ void main() {
     childPromptSeq: childSeq,
     edited: edited,
   );
+
+  Future<HostConnection> connect(FakeWorkspaceHost host) async {
+    final connection = workspaceHost(host);
+    addTearDown(connection.client.close);
+    await connection.client.mux.start();
+    return connection;
+  }
+
+  ProviderContainer open(HostConnection connection) {
+    final container = ProviderContainer(
+      overrides: [
+        activeConnectionProvider.overrideWithValue(AsyncData(connection)),
+        readListIdentityProvider.overrideWithValue(null),
+      ],
+    );
+    addTearDown(container.dispose);
+    return container;
+  }
+
+  Future<void> loadDrawer(ProviderContainer container) async {
+    container.read(workspacesProvider);
+    await container.read(workspacePrefsProvider.notifier).selection();
+    await container.read(sessionsProvider.future);
+    await container.read(drawerViewProvider.notifier).ready();
+    await pumpEventQueue();
+  }
+
+  List<DrawerBlock> blocks(ProviderContainer container, {DrawerFilter filter = DrawerFilter.all}) {
+    final scope = container.read(drawerScopeProvider)!;
+    return drawerBlocks(
+      sessions: scope.sessions,
+      pinnedIds: container.read(workspacesProvider).pinnedSessionIds,
+      view: container.read(drawerViewProvider),
+      filter: filter,
+      pending: const {},
+      unread: const {},
+      createdAt: const {},
+      now: DateTime(2026, 11, 28),
+      scoped: scope.scoped,
+      versions: container.read(drawerReplyVersionsProvider),
+    );
+  }
+
+  Iterable<String> rows(ProviderContainer c) => c.read(sessionsProvider).requireValue.map((s) => s.sessionId);
 
   test('the source and real resend seq anchor each turn independently', () async {
     final container = start();
@@ -141,37 +188,29 @@ void main() {
     host.seedSession('a', 'First', time);
     host.seedSession('ordinary', 'Independent', time.add(const Duration(seconds: 1)));
     host.seedSession('b', 'Edited', time.add(const Duration(seconds: 2)));
-    final connection = workspaceHost(host);
-    addTearDown(connection.client.close);
-    await connection.client.mux.start();
-
-    ProviderContainer open() {
-      final container = ProviderContainer(
-        overrides: [
-          activeConnectionProvider.overrideWithValue(AsyncData(connection)),
-          readListIdentityProvider.overrideWithValue(null),
-        ],
-      );
-      addTearDown(container.dispose);
-      return container;
-    }
-
-    Iterable<String> rows(ProviderContainer c) => c.read(sessionsProvider).requireValue.map((s) => s.sessionId);
-    final first = open();
+    final connection = await connect(host);
+    final first = open(connection);
     final versions = first.read(replyVersionsProvider.notifier);
     await fork(versions, 'a', 10, 'b', edited: true);
     final waiting = first.read(replyVersionsProvider).requireValue;
     expect(waiting.needsPrompt('b'), isTrue);
     expect(waiting.selectionFor('a', 10), isNull);
-    await first.read(sessionsProvider.future);
-    expect(rows(first), ['ordinary', 'a']);
+    await loadDrawer(first);
+    expect(rows(first), ['b', 'ordinary', 'a']);
+    expect(drawerSelectableIds(blocks(first)), ['ordinary', 'a']);
 
     first.read(currentSessionProvider.notifier).select('b');
     await pumpEventQueue();
-    expect(rows(first), ['ordinary', 'a']);
+    expect(drawerSelectableIds(blocks(first)), ['ordinary', 'a']);
     await versions.bindChildPrompt(local, 'b', 14);
     await versions.bindChildPrompt(local, 'b', 15); // A later human turn cannot overwrite the binding.
-    expect(rows(first), ['b', 'ordinary']);
+    expect(drawerSelectableIds(blocks(first)), ['b', 'ordinary']);
+    expect(rows(first), ['b', 'ordinary', 'a']);
+    final search = buildSessionSearchView(
+      const SessionSearchState(text: 'First'),
+      sessions: first.read(sessionsProvider).requireValue,
+    );
+    expect(search.results.active.single.session.sessionId, 'a');
     expect(first.read(replyVersionsProvider).requireValue.needsPrompt('b'), isFalse);
     expect(first.read(replyVersionsProvider).requireValue.selectionFor('b', 14)?.hasEdits, isTrue);
     expect(first.read(replyVersionsProvider).requireValue.selectionFor('b', 15), isNull);
@@ -179,11 +218,12 @@ void main() {
 
     first.read(currentSessionProvider.notifier).select('a');
     await pumpEventQueue();
-    expect(rows(first), ['ordinary', 'a']);
-    final second = open();
+    expect(drawerSelectableIds(blocks(first)), ['ordinary', 'a']);
+    final second = open(connection);
     await second.read(replyVersionsProvider.future);
-    await second.read(sessionsProvider.future);
-    expect(rows(second), ['ordinary', 'a']);
+    await loadDrawer(second);
+    expect(drawerSelectableIds(blocks(second)), ['ordinary', 'a']);
+    expect(rows(second), ['b', 'ordinary', 'a']);
     expect(second.read(hostSessionsProvider).keys, unorderedEquals(['a', 'b', 'ordinary']));
     expect(second.read(replyVersionsProvider).requireValue.selectionFor('b', 14)?.hasEdits, isTrue);
     second.read(currentSessionProvider);
@@ -193,5 +233,65 @@ void main() {
     host.sessions.removeWhere((session) => session['sessionId'] == 'a');
     await second.read(sessionsProvider.notifier).refresh();
     expect(rows(second), ['b', 'ordinary']);
+    expect(drawerSelectableIds(blocks(second)), ['b', 'ordinary']);
+  });
+
+  test('workspace and status filters keep eligible branches even when another branch was selected', () async {
+    final host = FakeWorkspaceHost();
+    final time = DateTime.utc(2026, 11, 27);
+    host.seedSession('a', 'First', time, running: true);
+    host.seedSession('b', 'Edited', time.add(const Duration(seconds: 1)));
+    final original = host.seedWorkspace('/root/original', sessionIds: ['a']);
+    final edited = host.seedWorkspace('/root/edited', sessionIds: ['b']);
+    final container = open(await connect(host));
+    final versions = container.read(replyVersionsProvider.notifier);
+    await fork(versions, 'a', 10, 'b', childSeq: 14);
+    await versions.select(local, 'b');
+    await loadDrawer(container);
+
+    expect(container.read(drawerScopeProvider)!.sessions.map((s) => s.sessionId), ['b', 'a']);
+    expect(drawerSelectableIds(blocks(container)), ['b']);
+    expect(drawerSelectableIds(blocks(container, filter: DrawerFilter.running)), ['a']);
+
+    final prefs = container.read(workspacePrefsProvider.notifier);
+    await prefs.select(original['workspaceId'] as String);
+    expect(drawerSelectableIds(blocks(container)), ['a']);
+    await prefs.select(edited['workspaceId'] as String);
+    await versions.select(local, 'a');
+    expect(drawerSelectableIds(blocks(container)), ['b']);
+    expect(rows(container), ['b', 'a']);
+  });
+
+  test('the displayed branch inherits existing pin and folder assignments without changing its selection id', () async {
+    final host = FakeWorkspaceHost()..pinned = ['a'];
+    final time = DateTime.utc(2026, 11, 27);
+    host.seedSession('a', 'First', time);
+    host.seedSession('b', 'Edited', time.add(const Duration(seconds: 1)));
+    host.seedSession('ordinary', 'Independent', time.add(const Duration(seconds: 2)));
+    final container = open(await connect(host));
+    final versions = container.read(replyVersionsProvider.notifier);
+    await fork(versions, 'a', 10, 'b', childSeq: 14);
+    await loadDrawer(container);
+
+    await versions.select(local, 'a');
+    expect(blocks(container).whereType<PinnedBlock>().single.items.single.sessionId, 'a');
+    await versions.select(local, 'b');
+    expect(blocks(container).whereType<PinnedBlock>().single.items.single.sessionId, 'b');
+
+    final folderId = await container
+        .read(drawerViewProvider.notifier)
+        .createFolder('Work', sessionIds: ['a', 'ordinary']);
+    final layout = blocks(container);
+    final folder = layout.whereType<FolderBlock>().single;
+    expect(folder.folder.id, folderId);
+    expect(folder.folder.sessionIds, ['a', 'ordinary']);
+    expect(folder.pinnedIds, {'b'});
+    expect(layout.whereType<PinnedBlock>(), isEmpty);
+    expect(drawerSelectableIds(layout), ['b', 'ordinary']);
+
+    final organization = container.read(drawerOrganizationProvider);
+    expect(organization.folderIdFor('b'), folderId);
+    expect(organization.pinTargets('b'), ['a']);
+    expect(organization.folderTargets('b'), ['a']);
   });
 }

@@ -882,9 +882,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     String requestId,
   ) async {
     final seq = await waitForForkPrompt(container, sessionId: sessionId, requestId: requestId, client: client);
-    if (seq != null && !container.disposed && container.read(activeHostProvider) == host) {
-      await versions.bindChildPrompt(host, sessionId, seq);
+    if (seq == null) return;
+    try {
+      if (container.read(activeHostProvider) != host) return;
+    } on StateError {
+      // The scope closed after the receipt arrived.
+      return;
     }
+    await versions.bindChildPrompt(host, sessionId, seq);
   }
 
   /// Send the original prompt in the new version. A failed send keeps its draft.

@@ -129,6 +129,9 @@ class ReplyVersionsState {
     return fork != null && fork.childPromptSeq == null;
   }
 
+  /// Stable identity of a reply-version group, not an action target.
+  String drawerGroupId(String sessionId) => _roots[sessionId] ?? sessionId;
+
   /// Known real session ids in this drawer group (or just [sessionId] for an
   /// ordinary conversation). The host inventory determines availability.
   Set<String> sessionIdsFor(String sessionId) {
@@ -149,16 +152,16 @@ class ReplyVersionsState {
     final representatives = <String, String>{};
     for (final id in _recent.reversed) {
       if (available.contains(id) && !needsPrompt(id)) {
-        representatives.putIfAbsent(_roots[id]!, () => id);
+        representatives.putIfAbsent(drawerGroupId(id), () => id);
       }
     }
     for (final row in rows) {
       final id = row.sessionId;
-      if (!needsPrompt(id)) representatives.putIfAbsent(_roots[id] ?? id, () => id);
+      if (!needsPrompt(id)) representatives.putIfAbsent(drawerGroupId(id), () => id);
     }
     return rows.where((row) {
       final id = row.sessionId;
-      return representatives.putIfAbsent(_roots[id] ?? id, () => id) == id;
+      return representatives.putIfAbsent(drawerGroupId(id), () => id) == id;
     }).toList();
   }
 
