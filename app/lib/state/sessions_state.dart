@@ -14,6 +14,7 @@ import 'hosts_state.dart';
 import '../runtime/local_paths.dart';
 import 'read_list_cache.dart';
 import 'read_list_identity.dart';
+import 'reply_versions_state.dart';
 import 'settings_state.dart';
 import 'workspaces_state.dart';
 
@@ -197,6 +198,10 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     ref.listen(companionSessionFilterProvider, (_, _) {
       if (state.hasValue && !state.isLoading) state = AsyncData(_visible());
     });
+    ref.listen(replyVersionsProvider, (previous, next) {
+      final versions = next.asData?.value;
+      if (versions != null && versions.host == _host && versions != previous?.value) _publishVisibleRows();
+    });
     final seq = ++_loadSeq;
     final host = ref.watch(activeHostProvider);
     if (host != _host) {
@@ -336,22 +341,20 @@ class SessionsController extends AsyncNotifier<List<SessionSummary>> {
     // Her conversation lives in 伙伴小屋, not the drawer.
     final companion = ref.read(companionSessionFilterProvider);
     final host = ref.read(activeHostProvider);
-    return ref
-        .read(readListCacheProvider)
-        .derive(
-          _rows()
-              .where(
-                (s) =>
-                    !s.blank &&
-                    !s.isSubagent &&
-                    !_archived.contains(s.sessionId) &&
-                    !pendingIds.contains(s.sessionId) &&
-                    !companion(host, s.sessionId),
-              )
-              .toList()
-            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
-          _origin,
-        );
+    final rows = _rows()
+        .where(
+          (s) =>
+              !s.blank &&
+              !s.isSubagent &&
+              !_archived.contains(s.sessionId) &&
+              !pendingIds.contains(s.sessionId) &&
+              !companion(host, s.sessionId),
+        )
+        .toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    final versions = ref.read(replyVersionsProvider).value;
+    final visible = versions != null && versions.host == host ? versions.collapse(rows) : rows;
+    return ref.read(readListCacheProvider).derive(visible, _origin);
   }
 
   /// The last `session/list`, with the titles read since ([_readTitles]).
@@ -981,6 +984,7 @@ class CurrentSessionController extends Notifier<String?> {
     final host = ref.read(activeHostProvider);
     ref.read(pendingSessionFolderProvider.notifier).select(null);
     state = sessionId;
+    if (sessionId != null) unawaited(ref.read(replyVersionsProvider.notifier).select(host, sessionId));
     unawaited(_persist(host, sessionId));
   }
 

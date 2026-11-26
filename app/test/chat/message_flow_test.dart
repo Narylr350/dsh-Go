@@ -7,6 +7,8 @@
 
 import 'package:dsh_app/state/attachments.dart' show sessionImageProvider;
 import 'package:dsh_app/state/chat_state.dart';
+import 'package:dsh_app/state/hosts_state.dart' show activeHostProvider;
+import 'package:dsh_app/state/reply_versions_state.dart';
 import 'package:dsh_app/state/sessions_state.dart';
 import 'package:dsh_app/ui/chat/chat_screen.dart';
 import 'package:dsh_app/ui/chat/widgets/assistant_message.dart';
@@ -84,7 +86,7 @@ void main() {
       expect(source.edited, [1]);
       expect(source.forkActions, ['重新回答失败']);
       expect(_container(tester).read(currentSessionProvider), 'fork-session');
-      expect(find.text('已在新对话中重新回答'), findsOneWidget);
+      expect(find.text('正在重新回答'), findsOneWidget);
       final fork = harness.controllers['fork-session']!;
       expect(fork.sent, [_question]);
       expect(fork.sentAttachments.single, isEmpty);
@@ -94,6 +96,37 @@ void main() {
       await tester.tap(find.text('返回原对话'));
       await pumpFrames(tester);
       expect(_container(tester).read(currentSessionProvider), 's1');
+    });
+
+    testWidgets('arrows switch the actual conversation that receives the next prompt', (tester) async {
+      final harness = await _pump(tester);
+      await tester.tap(find.byTooltip('重新回答'));
+      await pumpFrames(tester);
+      final container = _container(tester);
+      final index = container.read(replyVersionsProvider.notifier);
+      final bind = index.bindChildPrompt(container.read(activeHostProvider), 'fork-session', 10);
+      await pumpFrames(tester);
+      await bind;
+      harness.controllers['fork-session']!.emit(
+        ChatState(items: [_user(10, _question), _assistant(11, '新版回答')], loading: false),
+      );
+      await pumpFrames(tester);
+      expect(find.text('2/2'), findsOneWidget);
+      expect(find.text('新版回答', findRichText: true), findsOneWidget);
+
+      await tester.tap(find.byTooltip('上一版回答'));
+      await pumpFrames(tester);
+      expect(container.read(currentSessionProvider), 's1');
+      expect(find.text('1/2'), findsOneWidget);
+      await tester.tap(find.byTooltip('下一版回答'));
+      await pumpFrames(tester);
+      expect(container.read(currentSessionProvider), 'fork-session');
+      await tester.enterText(find.byType(TextField), '接着这个版本问');
+      await tester.pump();
+      await tester.tap(find.byIcon(AppIcons.send));
+      await pumpFrames(tester);
+      expect(harness.controllers['s1']!.sent, isEmpty);
+      expect(harness.controllers['fork-session']!.sent, [_question, '接着这个版本问']);
     });
 
     testWidgets('the prompt\'s images go again, read back from the session', (tester) async {
@@ -251,6 +284,35 @@ void main() {
       expect(_composerTexts(tester), contains('那为什么会重试？'));
       expect(find.descendant(of: find.byType(QuoteChip), matching: find.text('第一次在 30 秒时超时')), findsOneWidget);
     });
+  });
+
+  testWidgets('editing keeps the old question and restores it with the same arrows', (tester) async {
+    final harness = await _pump(tester);
+    await tester.longPress(find.text(_question));
+    await pumpFrames(tester);
+    await tester.tap(find.widgetWithText(TextSelectionToolbarTextButton, '编辑后重发').hitTestable());
+    await pumpFrames(tester);
+    expect(find.text('2/2'), findsNothing, reason: 'an unsent edit is still just a draft');
+    await tester.enterText(find.byType(TextField), '改一下这条提问');
+    await tester.pump();
+    await tester.tap(find.byIcon(AppIcons.send));
+    await pumpFrames(tester);
+    final container = _container(tester);
+    final index = container.read(replyVersionsProvider.notifier);
+    final bind = index.bindChildPrompt(container.read(activeHostProvider), 'fork-session', 10);
+    await pumpFrames(tester);
+    await bind;
+    final edited = harness.controllers['fork-session']!;
+    expect(edited.sent, ['改一下这条提问']);
+    edited.emit(ChatState(items: [_user(10, '改一下这条提问'), _assistant(11, '新版回答')], loading: false));
+    await pumpFrames(tester);
+    expect(find.text('2/2'), findsOneWidget);
+    await tester.tap(find.byTooltip('上一版回答'));
+    await pumpFrames(tester);
+    expect(container.read(currentSessionProvider), 's1');
+    expect(find.text(_question), findsOneWidget);
+    expect(find.text('改一下这条提问'), findsNothing);
+    expect(find.byTooltip('下一版回答'), findsOneWidget);
   });
 
   testWidgets('long-press a sent picture: 保存到相册', (tester) async {

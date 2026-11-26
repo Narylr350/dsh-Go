@@ -4,6 +4,7 @@
 
 import 'package:dsh_app/state/chat_state.dart';
 import 'package:dsh_app/state/sessions_state.dart';
+import 'package:dsh_app/ui/chat/chat_list.dart';
 import 'package:dsh_app/ui/chat/chat_screen.dart';
 import 'package:dsh_app/ui/chat/composer.dart';
 import 'package:dsh_app/ui/chat/composer_toast.dart';
@@ -61,7 +62,7 @@ void main() {
     await pumpFrames(tester);
 
     expect(_container(tester).read(currentSessionProvider), 'fork-session');
-    expect(find.text('已在新对话中重新回答'), findsOneWidget);
+    expect(find.text('正在重新回答'), findsOneWidget);
     expect(find.text('返回原对话'), findsOneWidget);
     // Clear of the composer, which stays where it was.
     expect(_gap(tester), moreOrLessEquals(composerToastGap + 8, epsilon: 1));
@@ -85,11 +86,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 16));
     expect(_container(tester).read(currentSessionProvider), 'fork-session');
-    expect(find.text('已在新对话中重新回答'), findsNothing, reason: 'still waiting for the composer');
+    expect(find.text('正在重新回答'), findsNothing, reason: 'still waiting for the composer');
 
     _container(tester).read(currentSessionProvider.notifier).select('s1');
     await pumpFrames(tester);
-    expect(find.text('已在新对话中重新回答'), findsNothing);
+    expect(find.text('正在重新回答'), findsNothing);
   });
 
   testWidgets('返回原对话 goes back to the source conversation', (tester) async {
@@ -112,7 +113,7 @@ void main() {
     await pumpFrames(tester);
 
     expect(_container(tester).read(currentSessionProvider), 'fork-session');
-    expect(find.text('已在新对话中打开'), findsOneWidget);
+    expect(find.text('正在编辑，发送后保留为新版本'), findsOneWidget);
     // The three lines grew the composer; the toast still clears it.
     expect(_gap(tester), greaterThanOrEqualTo(composerToastGap - 0.5));
   });
@@ -122,6 +123,9 @@ void main() {
     testWidgets('golden: fork toast ($suffix)', (tester) async {
       await _pump(tester, brightness: brightness);
       await tester.tap(find.byTooltip('重新回答'));
+      await pumpFrames(tester);
+      // Keep the long copy as a layout fixture; the live wording is asserted above.
+      tester.widget<ChatList>(find.byType(ChatList)).onToast!('已在新对话中重新回答', actionLabel: '返回原对话', onAction: () {});
       await pumpFrames(tester);
       await expectLater(find.byType(ChatScreen), matchesGoldenFile('goldens/fork_toast_$suffix.png'));
     });

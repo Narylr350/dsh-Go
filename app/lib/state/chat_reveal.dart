@@ -1,10 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// One request to show a conversation's newest line.
+/// Open a conversation at the newest line, or at a switched version's prompt.
 class ChatReveal {
-  const ChatReveal(this.sessionId, this.serial);
+  const ChatReveal(this.sessionId, this.serial, {this.promptSeq, this.afterReply = false});
 
   final String sessionId;
+  final int? promptSeq;
+  final bool afterReply;
 
   /// Counts requests, so the same conversation asked twice is two changes.
   final int serial;
@@ -17,7 +19,12 @@ class ChatRevealController extends Notifier<ChatReveal?> {
   @override
   ChatReveal? build() => null;
 
-  void reveal(String sessionId) => state = ChatReveal(sessionId, (state?.serial ?? 0) + 1);
+  void reveal(String sessionId, {int? promptSeq, bool afterReply = false}) =>
+      state = ChatReveal(sessionId, (state?.serial ?? 0) + 1, promptSeq: promptSeq, afterReply: afterReply);
+
+  void consumeVersion(ChatReveal reveal) {
+    if (identical(state, reveal)) state = null;
+  }
 }
 
 final chatRevealProvider = NotifierProvider<ChatRevealController, ChatReveal?>(ChatRevealController.new);

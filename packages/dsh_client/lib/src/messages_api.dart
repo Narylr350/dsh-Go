@@ -131,13 +131,19 @@ extension MessageActions on DshClient {
   ///   `session/updateQueue`; otherwise the fork's next turn would pick them up
   ///   together with the next message;
   /// * an inherited title `T` becomes `T (1)` (`T (2)` from `T (1)`), named
-  ///   from [sourceTitle] when given — what the official web client does. A
-  ///   fork without a title keeps automatic titling.
+  ///   from [sourceTitle] when given — what the official web client does.
+  ///   Pass [bumpTitle] as false to keep the title for an in-chat version.
+  ///   A fork without a title keeps automatic titling.
   ///
   /// Throws [DshRemoteException] when the fork itself fails
   /// (`session/fork-unavailable` for a seq the source does not have). The
   /// clean-up steps never throw: the fork exists by then.
-  Future<ForkOutcome> forkAt(String sessionId, int atSeq, {String? sourceTitle}) async {
+  Future<ForkOutcome> forkAt(
+    String sessionId,
+    int atSeq, {
+    String? sourceTitle,
+    bool bumpTitle = true,
+  }) async {
     final child = await forkSession(sessionId, atSeq: atSeq);
     SessionProjections? projections;
     try {
@@ -157,13 +163,17 @@ extension MessageActions on DshClient {
     }
     String? title;
     final inherited = projections?.title;
-    if (inherited != null && inherited.trim().isNotEmpty) {
-      final base = sourceTitle != null && sourceTitle.trim().isNotEmpty ? sourceTitle : inherited;
+    if (bumpTitle && inherited != null && inherited.trim().isNotEmpty) {
+      final base = sourceTitle != null && sourceTitle.trim().isNotEmpty
+          ? sourceTitle
+          : inherited;
       try {
         title = await renameSession(child, bumpedForkTitle(base));
       } catch (_) {
         title = null;
       }
+    } else {
+      title = inherited;
     }
     return ForkOutcome(child, title: title, leftQueued: left);
   }
