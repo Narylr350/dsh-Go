@@ -24,6 +24,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/harness.dart';
 
@@ -77,9 +78,7 @@ Finder _lastReply() => find.byType(AssistantMessage).last;
 class _PagedVersionChat extends FakeChatController {
   _PagedVersionChat() : super('fork-session', const ChatState());
 
-  final tail = <ChatItem>[
-    for (var seq = 100; seq < 140; seq++) _user(seq, 'Recent prompt $seq'),
-  ];
+  final tail = <ChatItem>[for (var seq = 100; seq < 140; seq++) _user(seq, 'Recent prompt $seq')];
   final pages = <Future<void> Function()>[];
   int _oldest = 100;
 
@@ -103,14 +102,16 @@ class _PagedVersionChat extends FakeChatController {
 Future<ProviderContainer> _openPagedVersion(WidgetTester tester, _PagedVersionChat chat) async {
   await _pump(tester, overrides: [chatProvider(chat.sessionId).overrideWith(() => chat)]);
   final container = _container(tester);
-  final record = container.read(replyVersionsProvider.notifier).recordFork(
-    container.read(activeHostProvider),
-    parentSessionId: 's1',
-    parentPromptSeq: 1,
-    childSessionId: chat.sessionId,
-    childPromptSeq: 10,
-    edited: true,
-  );
+  final record = container
+      .read(replyVersionsProvider.notifier)
+      .recordFork(
+        container.read(activeHostProvider),
+        parentSessionId: 's1',
+        parentPromptSeq: 1,
+        childSessionId: chat.sessionId,
+        childPromptSeq: 10,
+        edited: true,
+      );
   await pumpFrames(tester);
   await record;
   await tester.tap(find.byTooltip('下一版回答'));
@@ -122,6 +123,7 @@ Future<ProviderContainer> _openPagedVersion(WidgetTester tester, _PagedVersionCh
 
 void main() {
   setUpAll(loadTestFonts);
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('重新回答', () {
     testWidgets('forks before the prompt, opens the fork, sends it there', (tester) async {
