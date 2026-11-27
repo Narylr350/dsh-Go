@@ -19,8 +19,8 @@
 #   --keep-daemon                    leave the Gradle daemon running afterwards
 #   --no-companion                   release without the licensed companion pack
 #   --beta                           embed the beta channel token (internal builds only)
-#   --side                           test build that installs next to the released app
-#                                    (package ...dsh_app.test, named DSH Go 测试, own data)
+#   --side                           personal build that installs next to the released app
+#                                    (package ...dsh_app.test, named DSH Go, own data)
 #   --no-star                        release without the star prompt
 #   --dry-run                        print what would run
 #
