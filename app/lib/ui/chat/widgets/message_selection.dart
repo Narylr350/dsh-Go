@@ -28,6 +28,7 @@ class MessageSelection extends StatefulWidget {
     required this.child,
     this.onQuote,
     this.onEdit,
+    this.onRewind,
     this.onMore,
     this.live = false,
   });
@@ -39,6 +40,7 @@ class MessageSelection extends StatefulWidget {
   final Widget child;
   final ValueChanged<String>? onQuote;
   final VoidCallback? onEdit;
+  final VoidCallback? onRewind;
   final VoidCallback? onMore;
 
   /// Still being written. Selecting works as on a finished message, but the
@@ -62,6 +64,7 @@ class _MessageSelectionState extends State<MessageSelection> {
     final some = selected.trim().isNotEmpty;
     final onQuote = widget.onQuote;
     final onEdit = widget.onEdit;
+    final onRewind = widget.onRewind;
     final onMore = widget.onMore;
     final more = onMore == null
         ? null
@@ -75,6 +78,15 @@ class _MessageSelectionState extends State<MessageSelection> {
     return AdaptiveTextSelectionToolbar.buttonItems(
       anchors: region.contextMenuAnchors,
       buttonItems: [
+        if (onRewind != null)
+          ContextMenuButtonItem(
+            label: MessageAction.rewind.label,
+            onPressed: () {
+              region.hideToolbar();
+              region.clearSelection();
+              onRewind();
+            },
+          ),
         if (onEdit != null)
           ContextMenuButtonItem(
             label: MessageAction.edit.label,

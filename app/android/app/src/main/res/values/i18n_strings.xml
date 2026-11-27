@@ -52,6 +52,7 @@
     <string name="live_chip_paused">Paused</string>
     <string name="live_phone_pause">Pause</string>
     <string name="live_phone_resume">Continue</string>
+    <string name="live_open_floating">Open in floating window</string>
     <!-- overlay -->
     <string name="overlay_allow_once">Allow once</string>
     <string name="overlay_allow_round">Allow this turn</string>

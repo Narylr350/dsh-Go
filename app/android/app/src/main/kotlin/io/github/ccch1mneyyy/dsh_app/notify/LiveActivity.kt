@@ -28,6 +28,7 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.IconPainter
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.StatusLines
 import io.github.ccch1mneyyy.dsh_app.runtime.DshService
 import io.github.ccch1mneyyy.dsh_app.runtime.VendorSettings
+import io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity
 import io.github.ccch1mneyyy.dsh_app.theme.ThemeAccent
 
 /**
@@ -341,6 +342,12 @@ object LiveActivity {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             builder.addAction(Notification.Action.Builder(null, AppStrings.get(ctx, R.string.service_stop_phone), stop).build())
+        } else if (c.sessionId != null && c.host != null) {
+            // 小米通知下拉还受系统白名单限制；此按钮不依赖白名单，普通点击仍走原入口。
+            // 手机操控通知保持原来的暂停/返回语义，不绕过它的安全处理。
+            val entry = EntryActivity.floatingChat(ctx, c.sessionId, c.host, c.eventId)
+            val floating = PendingIntent.getActivity(ctx, ID, entry, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            builder.addAction(Notification.Action.Builder(null, AppStrings.get(ctx, R.string.live_open_floating), floating).build())
         }
         val icon = picture?.let(Icon::createWithBitmap) ?: Icon.createWithResource(ctx, R.mipmap.ic_launcher)
         XiaomiFocus.apply(ctx, builder, c, icon)

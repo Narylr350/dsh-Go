@@ -25,6 +25,7 @@ enum MessageAction {
   share(AppIcons.share),
   readAloud(AppIcons.readAloud),
   regenerate(AppIcons.regenerate),
+  rewind(AppIcons.regenerate),
   branch(AppIcons.fork),
   edit(AppIcons.edit);
 
@@ -38,6 +39,7 @@ enum MessageAction {
     MessageAction.share => appL10n.commonShare,
     MessageAction.readAloud => appL10n.speechReadAloud,
     MessageAction.regenerate => appL10n.chatRegenerate,
+    MessageAction.rewind => appL10n.chatRewind,
     MessageAction.branch => appL10n.chatBranchFromHere,
     MessageAction.edit => appL10n.chatEditAndResend,
   };

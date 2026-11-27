@@ -6974,6 +6974,42 @@ abstract class L10n {
   /// **'写不进去：本机运行时还没装好'**
   String get diagnosticsForAiFailed;
 
+  /// No description provided for @chatRewind.
+  ///
+  /// In zh, this message translates to:
+  /// **'回退到这里'**
+  String get chatRewind;
+
+  /// No description provided for @chatRewindConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'将隐藏这条消息及之后的内容，并从模型上下文中移除。原文会替换当前草稿，供你修改后重发。只回退对话，不还原文件。'**
+  String get chatRewindConfirm;
+
+  /// No description provided for @chatRewindAttachments.
+  ///
+  /// In zh, this message translates to:
+  /// **'原消息有附件，回退后需重新添加。'**
+  String get chatRewindAttachments;
+
+  /// No description provided for @chatRewindDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'已回退，原文已填回输入框'**
+  String get chatRewindDone;
+
+  /// No description provided for @chatRewindSyncPending.
+  ///
+  /// In zh, this message translates to:
+  /// **'已回退并回填原文，历史同步未完成，请刷新对话'**
+  String get chatRewindSyncPending;
+
+  /// No description provided for @chatRewindFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'回退未确认，请刷新对话后查看；不要直接重复提交'**
+  String get chatRewindFailed;
+
   /// No description provided for @chatBackgroundTaskNotice.
   ///
   /// In zh, this message translates to:

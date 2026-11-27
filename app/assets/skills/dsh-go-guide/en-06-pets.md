@@ -37,6 +37,10 @@ While she is in the floating window, one tap plays with her: her head, face and 
 
 On Android 13 and later, if the switch still won't turn on after visiting system settings, **Switch disabled** appears on the pet page. Tap it for brand-specific steps to **Allow restricted settings**.
 
+On Android 12 or later, when the system supports freeform windows, a double tap opens the existing conversation in a floating window near the bottom right, occupying about half the screen. Use the system window frame to move, resize or close it; closing leaves you in the previous app. Chat and model switching use the full app, without creating another conversation. Unsupported systems open the app normally in full screen.
+
+Task live-activity notifications also have an **Open in floating window** button for the corresponding conversation; a regular notification tap keeps its original behavior. Xiaomi also restricts the notification press-and-drag gesture with a system-maintained app allowlist, which the app cannot enable itself. Use the notification button when that gesture is unavailable. Phone-control notifications retain their existing pause, continue and return behavior.
+
 ## Pet picture in picture on iPhone
 
 Under [Phone control settings](dshgo://open/phone), pet picture in picture is optional and off by default; phone control does not require PiP or a selected pet. When enabled, iOS displays its standard PiP window and may still suspend background work. The window currently supports the pixel pet only; the Companion room's WebView character is available inside the app, not in PiP. The Android overlay permission, action wheel and screenshot question below do not apply on iPhone.

@@ -3957,6 +3957,26 @@ class L10nEn extends L10n {
   String get diagnosticsForAiFailed => 'Not written: the local runtime is not installed';
 
   @override
+  String get chatRewind => 'Rewind to here';
+
+  @override
+  String get chatRewindConfirm =>
+      'Hide this message and everything after it, and remove them from the model context. The original text will replace your current draft for editing and resending. Only the conversation is rewound; files are not restored.';
+
+  @override
+  String get chatRewindAttachments => 'This message has attachments. Add them again after rewinding.';
+
+  @override
+  String get chatRewindDone => 'Rewound. Original text restored to the composer';
+
+  @override
+  String get chatRewindSyncPending =>
+      'Rewound and text restored, but history sync is incomplete. Refresh the conversation';
+
+  @override
+  String get chatRewindFailed => 'Rewind was not confirmed. Refresh the conversation before trying again';
+
+  @override
   String get chatBackgroundTaskNotice => 'Background task notice';
 
   @override

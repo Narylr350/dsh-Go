@@ -40,6 +40,7 @@ export 'src/files_api.dart';
 export 'src/media_meta.dart';
 export 'src/goals_api.dart';
 export 'src/messages_api.dart';
+export 'src/rewind_api.dart';
 export 'src/models.dart';
 export 'src/mux.dart';
 export 'src/phone_callback.dart';

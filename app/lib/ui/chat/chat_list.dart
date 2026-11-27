@@ -28,6 +28,7 @@ import '../../companion/companion_reply.dart' show companionHasMarks, companionW
 import '../../companion/companion_state.dart' show companionSessionFilterProvider;
 import '../../state/hosts_state.dart' show HostKind, activeHostProvider;
 import '../../state/regenerate.dart';
+import '../../state/rewind_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../common/app_dialog.dart';
@@ -98,6 +99,7 @@ class ChatList extends ConsumerStatefulWidget {
     this.onWithdraw,
     this.onSendNow,
     this.onEditPrompt,
+    this.onRewindPrompt,
     this.onResend,
     this.onQuote,
     this.onToast,
@@ -133,6 +135,9 @@ class ChatList extends ConsumerStatefulWidget {
   /// ends just before it is open; the screen puts the text into the composer.
   /// Null leaves the action out.
   final ValueChanged<String>? onEditPrompt;
+
+  /// 原会话回退成功后的原文回填，不新建会话、不自动发送。
+  final ValueChanged<String>? onRewindPrompt;
 
   /// 「重新回答」: called once the fork that ends just before the last prompt
   /// is open and selected, with that prompt's text and images; the screen
@@ -445,6 +450,7 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
         !same(oldWidget.onWithdraw, widget.onWithdraw) ||
         !same(oldWidget.onSendNow, widget.onSendNow) ||
         !same(oldWidget.onEditPrompt, widget.onEditPrompt) ||
+        !same(oldWidget.onRewindPrompt, widget.onRewindPrompt) ||
         !same(oldWidget.onResend, widget.onResend) ||
         !same(oldWidget.onQuote, widget.onQuote) ||
         !same(oldWidget.onSwitchModel, widget.onSwitchModel)) {
@@ -962,6 +968,11 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    final rewindAvailable = ref.watch(rewindAvailableProvider).value == true;
+    if (_rewindAvailable != rewindAvailable) {
+      _rewindAvailable = rewindAvailable;
+      _forgetBuiltRows();
+    }
     final s = ref.watch(chatProvider(widget.sessionId));
     _running = s.running;
     // Her conversation reads as talk: marks out, what she used folded away.
@@ -1429,6 +1440,54 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
     compose?.call(withoutAppNotes(item.text));
   }
 
+  bool _rewindAvailable = false;
+  bool _rewinding = false;
+
+  Future<void> _rewindPrompt(UserChatItem item) async {
+    if (_rewinding || widget.onRewindPrompt == null) return;
+    final sessionId = widget.sessionId;
+    final client = ref.read(activeConnectionProvider).value?.client;
+    if (client == null) return;
+    _rewinding = true;
+    // 异步确认期间切换主机或会话后，不再提交，也不把原文填进别的对话。
+    bool current() =>
+        mounted &&
+        widget.sessionId == sessionId &&
+        ref.read(currentSessionProvider) == sessionId &&
+        identical(ref.read(activeConnectionProvider).value?.client, client);
+    try {
+      final preview = await client.previewRewind(sessionId, item.seq);
+      if (!mounted || !current()) return;
+      final confirmed = await showAppDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text(appL10n.chatRewind),
+          content: Text(
+            '${appL10n.chatRewindConfirm}${preview.hasAttachments ? '\n\n${appL10n.chatRewindAttachments}' : ''}',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog, false), child: Text(appL10n.commonCancel)),
+            TextButton(onPressed: () => Navigator.pop(dialog, true), child: Text(appL10n.chatRewind)),
+          ],
+        ),
+      );
+      if (confirmed != true || !current()) return;
+      await client.commitRewind(sessionId, item.seq, preview.headSeq);
+      if (!current()) return;
+      widget.onRewindPrompt?.call(withoutAppNotes(preview.text));
+      // 只刷新日志；提交请求本身不重试，是否成功以插件回答为准。
+      final synced = await ref.read(chatProvider(sessionId).notifier).resync();
+      if (!mounted || !current()) return;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(synced ? appL10n.chatRewindDone : appL10n.chatRewindSyncPending)));
+    } catch (error) {
+      if (!mounted || !current()) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text('${appL10n.chatRewindFailed}: $error')));
+    } finally {
+      _rewinding = false;
+    }
+  }
+
   /// Switches to the fork; the toast offers the way back.
   void _openFork(ForkOutcome outcome, ScaffoldMessengerState? messenger, String message) {
     final source = widget.sessionId;
@@ -1555,6 +1614,9 @@ class _ChatListState extends ConsumerState<ChatList> with SingleTickerProviderSt
             ? null
             : SentAttachments.echoed(sessionId: widget.sessionId, images: item.images, files: item.files),
         onEdit: widget.onEditPrompt == null ? null : () => _editPrompt(item),
+        onRewind: !_rewindAvailable || widget.onRewindPrompt == null || item.sourceKind != 'user'
+            ? null
+            : () => _rewindPrompt(item),
         onQuote: widget.onQuote == null ? null : _quote,
       ),
       PendingRow(:final prompt) => _pendingBubble(prompt),

@@ -3,6 +3,7 @@ package io.github.ccch1mneyyy.dsh_app.shortcuts
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.companion.CompanionAssistant
@@ -10,6 +11,7 @@ import io.github.ccch1mneyyy.dsh_app.companion.CompanionReminderReceiver
 import io.github.ccch1mneyyy.dsh_app.companion.ReminderKey
 import io.github.ccch1mneyyy.dsh_app.pet.PetOverlay
 import io.github.ccch1mneyyy.dsh_app.pet.PetScreenshot
+import io.github.ccch1mneyyy.dsh_app.window.FloatingChatWindow
 
 /**
  * Where the launcher shortcuts (res/xml/shortcuts.xml and the recent conversations) and the
@@ -67,7 +69,11 @@ class EntryActivity : Activity() {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             try {
-                startActivity(forward)
+                if (intent.getBooleanExtra(FloatingChatWindow.EXTRA_REQUEST, false)) {
+                    FloatingChatWindow.start(this, forward)
+                } else {
+                    startActivity(forward)
+                }
                 reminder?.let {
                     // This private Activity, reached by our immutable PendingIntent,
                     // records an open. Exported MainActivity extras are not evidence.
@@ -125,5 +131,15 @@ class EntryActivity : Activity() {
                 putExtra(EXTRA_SESSION, sessionId)
                 if (host != null) putExtra(EXTRA_HOST, host)
             }
+
+        /** 到点击时才计算小窗位置，通知发出后旋转屏幕也不会沿用旧坐标。 */
+        fun floatingChat(context: Context, sessionId: String, host: String, eventId: String?): Intent =
+            openChat(context, sessionId, host)
+                .putExtra(FloatingChatWindow.EXTRA_REQUEST, true)
+                .setData(Uri.Builder().scheme("dsh-window").authority("chat")
+                    .appendQueryParameter("host", host)
+                    .appendQueryParameter("session", sessionId)
+                    .apply { if (eventId != null) appendQueryParameter("event", eventId) }
+                    .build())
     }
 }

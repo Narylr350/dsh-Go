@@ -3758,6 +3758,24 @@ class L10nZh extends L10n {
   String get diagnosticsForAiFailed => '写不进去：本机运行时还没装好';
 
   @override
+  String get chatRewind => '回退到这里';
+
+  @override
+  String get chatRewindConfirm => '将隐藏这条消息及之后的内容，并从模型上下文中移除。原文会替换当前草稿，供你修改后重发。只回退对话，不还原文件。';
+
+  @override
+  String get chatRewindAttachments => '原消息有附件，回退后需重新添加。';
+
+  @override
+  String get chatRewindDone => '已回退，原文已填回输入框';
+
+  @override
+  String get chatRewindSyncPending => '已回退并回填原文，历史同步未完成，请刷新对话';
+
+  @override
+  String get chatRewindFailed => '回退未确认，请刷新对话后查看；不要直接重复提交';
+
+  @override
   String get chatBackgroundTaskNotice => '后台任务通知';
 
   @override

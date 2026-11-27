@@ -13,6 +13,10 @@ Type your message and tap the send button. The chat is created when you send the
 
 With a hardware keyboard, Enter adds a line break and Ctrl+Enter or ⌘+Enter sends. See Hardware keyboard below for more controls.
 
+## Rewind a sent message
+
+When the current host exposes the HTTP contract of `dsh-rewind-plugin` 0.24.1, long-press a message you sent and choose **Rewind to here**. After confirmation, it and later messages are removed from the conversation and model context. Its original text replaces the current draft for you to edit and send; no new chat is created. Reattach any attachments. Only the conversation is rewound, not files. Session logs are preserved: the plugin only appends rewind markers. You can rewind again to an earlier message. This action is unavailable over relay connections.
+
 ## Choose a model
 
 On a phone, tap into the composer, then tap the model under it. On a tablet or wider screen, tap the model capsule at the top right. Either way opens **Choose model**. Tap a model to switch right away; if it supports levels, pick one under **Thinking effort**. Typing `/model` in the composer opens it too. **Manage models** at the bottom goes straight to the models page in Settings; to add and manage models, see [Models and providers](02-models.md).

@@ -57,6 +57,7 @@ import io.github.ccch1mneyyy.dsh_app.runtime.DshService
 import io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController
 import io.github.ccch1mneyyy.dsh_app.shortcuts.EntryActivity
 import io.github.ccch1mneyyy.dsh_app.voice.WavRecorder
+import io.github.ccch1mneyyy.dsh_app.window.FloatingChatWindow
 import java.util.Calendar
 import java.util.IdentityHashMap
 import java.util.concurrent.Executors
@@ -393,8 +394,8 @@ internal object PetOverlay {
         return original.copy(text = words)
     }
 
-    private fun openCompanion() = openIntent(Intent(app, MainActivity::class.java)
-        .setAction(Intent.ACTION_VIEW).setData(Uri.parse("dshgo://open/companion")), companionName)
+    private fun openCompanion(floating: Boolean = false) = openIntent(Intent(app, MainActivity::class.java)
+        .setAction(Intent.ACTION_VIEW).setData(Uri.parse("dshgo://open/companion")), companionName, floating)
 
     fun setEnabled(on: Boolean): Map<String, Any?> {
         if (!on) capture.invalidate()
@@ -1365,9 +1366,9 @@ internal object PetOverlay {
             if (dimmed) evaluate()
             dismissMenu()
             prefs.edit().putInt(K_TAP_HINTS, TAP_HINTS).apply()
-            if (companionResident) { openCompanion(); return }
+            if (companionResident) { openCompanion(floating = true); return }
             val push = machine.last
-            open(push?.sessionId, push?.host, null)
+            open(push?.sessionId, push?.host, null, floating = true)
         }
 
         override fun onLongPress(rawX: Float?, rawY: Float?) {
@@ -2295,16 +2296,23 @@ internal object PetOverlay {
      * activity on stock Android, but some vendors block 「后台弹出界面」 on their own: when the app
      * isn't up shortly after, a notification takes the tap instead (as SystemActions.kt does).
      */
-    private fun open(sessionId: String?, host: String?, title: String?) = openIntent(
+    private fun open(sessionId: String?, host: String?, title: String?, floating: Boolean = false) = openIntent(
         if (sessionId != null) EntryActivity.openChat(app, sessionId, host) else EntryActivity.openApp(app),
         title,
+        floating,
     )
 
-    private fun openIntent(entry: Intent, title: String?) {
+    private fun openIntent(entry: Intent, title: String?, floating: Boolean = false) {
         val token = windows.openToken() ?: return
         val intent = entry.putExtra(EntryActivity.EXTRA_PET_GENERATION, token).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (floating) intent.putExtra(FloatingChatWindow.EXTRA_REQUEST, true)
         try {
-            app.startActivity(intent)
+            // 对话的私有中转页负责验证宠物代次后再开小窗；伙伴页本来就直达主 Activity。
+            if (floating && intent.component?.className == MainActivity::class.java.name) {
+                FloatingChatWindow.start(app, intent)
+            } else {
+                app.startActivity(intent)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "open failed", e)
             if (windows.acceptsOpen(token)) postOpenNotice(intent, title)
@@ -2319,7 +2327,9 @@ internal object PetOverlay {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
         if (!nm.areNotificationsEnabled()) return
         nm.createNotificationChannel(NotificationChannel(CHANNEL_OPEN, AppStrings.get(app, R.string.pet_open_channel), NotificationManager.IMPORTANCE_HIGH))
-        val pi = PendingIntent.getActivity(app, NOTICE_ID, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val options = if (intent.getBooleanExtra(FloatingChatWindow.EXTRA_REQUEST, false))
+            FloatingChatWindow.options(app) else null
+        val pi = PendingIntent.getActivity(app, NOTICE_ID, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT, options)
         openPendingIntent = pi
         val n = Notification.Builder(app, CHANNEL_OPEN)
             .setSmallIcon(R.drawable.ic_stat_dsh)

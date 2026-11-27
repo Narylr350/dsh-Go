@@ -1956,6 +1956,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                                   onWithdraw: _withdraw,
                                   onSendNow: _sendNow,
                                   onEditPrompt: _compose,
+                                  onRewindPrompt: readOnly
+                                      ? null
+                                      : (text) {
+                                          ref.read(composerQuoteProvider.notifier).clear(_draftKey);
+                                          setState(() => _drafts = const []);
+                                          _compose(text);
+                                          _saveDraft();
+                                        },
                                   onResend: _resend,
                                   onQuote: readOnly ? null : (passage) => _quote(sessionId, passage),
                                   onToast: _composerToast,

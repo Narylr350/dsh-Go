@@ -1238,9 +1238,9 @@ final class SessionSnapshotEvent extends DshEvent {
       sessionId: sessionId,
       header: SessionHeader.fromJson(map['header']),
       cursor: asInt(map['cursor']) ?? -1,
-      events: asListOrEmpty(
-        map['records'],
-      ).map((r) => SessionLogEvent.fromJson(asMapOrEmpty(r)['event'])).toList(growable: false),
+      events: asListOrEmpty(map['records'])
+          .map((r) => SessionLogEvent.fromJson(asMapOrEmpty(r)['event']))
+          .toList(growable: false),
       hasMore: map['hasMore'] == true,
       projections: SessionProjections.fromJson(map['projections']),
       assistantRevision: asInt(stream?['revision']),
@@ -1350,7 +1350,14 @@ sealed class SessionLogEvent extends DshEvent {
       case 'step/end':
         return StepEndedEvent(seq, time, data, turn: turn(), step: step());
       case 'user/message':
-        return UserMessageEvent(seq, time, data, message: Message.fromJson(data));
+        return UserMessageEvent(
+          seq,
+          time,
+          data,
+          message: Message.fromJson(data),
+          surfaceOp: asMap(map['surfaceOp']),
+          sourceEventSeqs: [for (final value in asList(map['sourceEventSeqs']) ?? const []) asInt(value) ?? -1],
+        );
       case 'assistant/message':
         return AssistantMessageEvent(
           seq,
@@ -1523,9 +1530,25 @@ final class StepEndedEvent extends SessionLogEvent {
 /// A user-role message on the model surface. Only [isHumanPrompt] ones are
 /// what the person typed; others are injected context.
 final class UserMessageEvent extends SessionLogEvent {
-  const UserMessageEvent(int seq, DateTime time, Map<String, Object?> data, {required this.message})
-    : super(seq, time, 'user/message', data);
+  const UserMessageEvent(
+    int seq,
+    DateTime time,
+    Map<String, Object?> data, {
+    required this.message,
+    this.surfaceOp,
+    this.sourceEventSeqs = const [],
+  }) : super(seq, time, 'user/message', data);
   final Message message;
+  final Map<String, Object?>? surfaceOp;
+  final List<int> sourceEventSeqs;
+
+  /// 与 dsh-rewind 的 Web marker 定义一致；不把普通注入消息当成回退。
+  bool get isRewindMarker =>
+      message.id.isNotEmpty &&
+      message.source.kind == 'dsh-rewind' &&
+      surfaceOp?['op'] == 'replace' &&
+      sourceEventSeqs.isNotEmpty &&
+      sourceEventSeqs.every((value) => value >= 0 && value <= seq);
 
   bool get isHumanPrompt => message.source.isHuman;
 

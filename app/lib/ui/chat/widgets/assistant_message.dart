@@ -360,7 +360,7 @@ class _AssistantMessageState extends State<AssistantMessage> {
         onRegenerate?.call();
       case MessageAction.branch:
         onBranch?.call();
-      case MessageAction.edit:
+      case MessageAction.edit || MessageAction.rewind:
         break;
     }
   }

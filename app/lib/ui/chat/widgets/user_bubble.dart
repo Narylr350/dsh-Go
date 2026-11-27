@@ -40,6 +40,7 @@ class UserBubble extends StatelessWidget {
     this.pendingIcon = AppIcons.queued,
     this.pendingActions = const [],
     this.onEdit,
+    this.onRewind,
     this.onQuote,
   });
 
@@ -59,6 +60,7 @@ class UserBubble extends StatelessWidget {
   /// "编辑后重发" in the selection toolbar and the full menu. Optimistic
   /// bubbles leave it out; they have "撤回" instead.
   final VoidCallback? onEdit;
+  final VoidCallback? onRewind;
 
   /// "引用" in the long-press menu (and in 选择文字); null leaves it out.
   final ValueChanged<String>? onQuote;
@@ -68,6 +70,7 @@ class UserBubble extends StatelessWidget {
 
   Future<void> _menu(BuildContext context) async {
     final onEdit = this.onEdit;
+    final onRewind = this.onRewind;
     final onQuote = this.onQuote;
     final action = await showMessageMenu(
       context,
@@ -79,6 +82,7 @@ class UserBubble extends StatelessWidget {
         MessageAction.selectText,
         if (onQuote != null) MessageAction.quote,
         if (onEdit != null) MessageAction.edit,
+        if (onRewind != null) MessageAction.rewind,
       ],
     );
     if (!context.mounted || action == null) return;
@@ -89,6 +93,8 @@ class UserBubble extends StatelessWidget {
         await showSelectTextSheet(context, _shown, onQuote: onQuote);
       case MessageAction.edit:
         onEdit?.call();
+      case MessageAction.rewind:
+        onRewind?.call();
       case MessageAction.quote:
         // The message's own words: an earlier quote it opened with stays out.
         onQuote?.call(splitQuote(_shown).body);
@@ -136,10 +142,7 @@ class UserBubble extends StatelessWidget {
     final Decoration bubbleDecoration = themeStyle.pack == null
         ? ShapeDecoration(color: surfaces.userBubble, shape: AppShape.bubble)
         : switch (bubbleVariant) {
-            ThemeUserBubbleStyle.soft => ShapeDecoration(
-              color: surfaces.userBubble,
-              shape: themeStyle.bubbleShape(),
-            ),
+            ThemeUserBubbleStyle.soft => ShapeDecoration(color: surfaces.userBubble, shape: themeStyle.bubbleShape()),
             ThemeUserBubbleStyle.outlined => ShapeDecoration(
               color: surfaces.userBubble.withValues(alpha: 0.72),
               shape: themeStyle.bubbleShape(
@@ -152,9 +155,7 @@ class UserBubble extends StatelessWidget {
               shape: themeStyle.bubbleShape(),
             ),
             ThemeUserBubbleStyle.minimal => BoxDecoration(
-              border: Border(
-                right: BorderSide(color: themeStyle.rule ?? scheme.primary, width: 2.5),
-              ),
+              border: Border(right: BorderSide(color: themeStyle.rule ?? scheme.primary, width: 2.5)),
             ),
           };
     final bubble = Semantics(
@@ -171,6 +172,7 @@ class UserBubble extends StatelessWidget {
             text: _shown,
             onQuote: onQuote,
             onEdit: onEdit,
+            onRewind: onRewind,
             onMore: () => _menu(context),
             child: content,
           ),

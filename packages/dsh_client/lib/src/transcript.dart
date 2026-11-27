@@ -229,6 +229,9 @@ class ChatTranscript {
   List<TurnTrace> get turns => _traces ??= _buildTraces();
 
   List<TurnTrace> _buildTraces() {
+    if (_log.values.any((e) => e is UserMessageEvent && e.isRewindMarker)) {
+      return traceTurns(_visibleEvents());
+    }
     final prefix = _completedTracePrefix;
     final traces = prefix == null || prefix.isEmpty
         ? traceTurns(_log.values, reuse: _previousTraces)
@@ -269,6 +272,7 @@ class ChatTranscript {
   }
 
   void _logChanged({SessionLogEvent? appended}) {
+    if (appended is UserMessageEvent && appended.isRewindMarker) appended = null;
     if (appended == null) {
       _completedTracePrefix = null;
       _durableFold = null;
@@ -348,6 +352,7 @@ class ChatTranscript {
         final appended = previousLast == null || event.seq > previousLast;
         final fresh = event.seq > cursor;
         _log[event.seq] = event;
+        if (event is UserMessageEvent && event.isRewindMarker) _drafts.clear();
         if (fresh) cursor = event.seq;
         switch (event) {
           case InboxSplicedEvent() when fresh:
@@ -444,7 +449,7 @@ class ChatTranscript {
     var fold = _durableFold;
     if (fold == null) {
       fold = _DurableFold(showSyntheticUserMessages);
-      for (final event in _log.values) {
+      for (final event in _visibleEvents()) {
         fold.apply(event);
       }
       _durableFold = fold;
@@ -455,6 +460,19 @@ class ChatTranscript {
     }
     _durableTail.clear();
     return fold.build(_approvals.values);
+  }
+
+  /// 保留原始日志；只对渲染折叠应用插件追加的遮蔽区间。后续新消息照常显示。
+  Iterable<SessionLogEvent> _visibleEvents() sync* {
+    final cuts = [
+      for (final event in _log.values)
+        if (event is UserMessageEvent && event.isRewindMarker) (event.sourceEventSeqs.first, event.seq),
+    ];
+    for (final event in _log.values) {
+      if (event is UserMessageEvent && event.isRewindMarker) continue;
+      if (cuts.any((cut) => event.seq >= cut.$1 && event.seq < cut.$2)) continue;
+      yield event;
+    }
   }
 
   static NoticeChatItem? _turnNotice(int seq, TurnEndReason reason) => switch (reason.kind) {
