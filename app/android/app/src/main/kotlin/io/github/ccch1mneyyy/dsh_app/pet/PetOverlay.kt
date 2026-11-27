@@ -2307,8 +2307,9 @@ internal object PetOverlay {
         val intent = entry.putExtra(EntryActivity.EXTRA_PET_GENERATION, token).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (floating) intent.putExtra(FloatingChatWindow.EXTRA_REQUEST, true)
         try {
-            // 对话的私有中转页负责验证宠物代次后再开小窗；伙伴页本来就直达主 Activity。
-            if (floating && intent.component?.className == MainActivity::class.java.name) {
+            // 桌面上启动时，中转页也必须带小窗参数，不能先创建全屏任务再切换。
+            // 私有中转页仍负责验证宠物代次，并把小窗请求交给原主 Activity。
+            if (floating) {
                 FloatingChatWindow.start(app, intent)
             } else {
                 app.startActivity(intent)

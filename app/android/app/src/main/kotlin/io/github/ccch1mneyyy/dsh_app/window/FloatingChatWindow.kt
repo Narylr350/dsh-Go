@@ -45,15 +45,19 @@ object FloatingChatWindow {
             // Android 只公开了窗口位置，没有公开窗口模式 setter。此键来自系统 ActivityOptions，
             // 仅在声明支持 freeform 的设备上传递；系统忽略它时自然以全屏打开。
             putInt(WINDOWING_MODE, FREEFORM)
-            useScreenSpaceBounds(this)
+            configureMiuiFreeform(this)
         }
     }
 
     @Suppress("DEPRECATION")
-    private fun useScreenSpaceBounds(options: Bundle) {
+    private fun configureMiuiFreeform(options: Bundle) {
         val key = "miui:activity.options.injector"
         val injector = options.getParcelable<Parcelable>(key) ?: return
         if (injector.javaClass.name != "android.app.ActivityOptions\$ActivityOptionsInjector") return
+        // 与小米 MiuiMultiWindowUtils.getActivityOptions 一致：显式小窗启动标记为 2，
+        // 与默认标记 1 合并。仅窗口模式和 bounds 不构成完整的 OEM 小窗请求。
+        val config = "key_miui_config_flag"
+        options.putInt(config, options.getInt(config, 1) or 2)
         val parcel = Parcel.obtain()
         try {
             // 小米会在 launchBounds 外再缩放一次，导致窗口偏离右下角、实际尺寸缩水。

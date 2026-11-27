@@ -217,6 +217,7 @@
         <activity
             android:name=".shortcuts.EntryActivity"
             android:exported="false"
+            android:resizeableActivity="true"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:taskAffinity=""
